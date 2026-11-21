@@ -143,3 +143,8 @@ button.rec { background: #7a231c; border-color: var(--warn); animation: pulse 1s
 .deltas i { font-style: normal; }
 .cand button { align-self: flex-start; }
 .errors { z-index: 25; }
+.shop-option { display: grid; grid-template-columns: auto 44px 1fr; gap: 8px; align-items: start; cursor: pointer; font-size: 12px; line-height: 1.35; }
+.shop-option input { accent-color: var(--accent); margin-top: 4px; }
+.shop-option img { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; background: #fff; }
+.shop-option i { color: var(--muted); font-style: normal; }
+.proposal a { color: var(--accent); }

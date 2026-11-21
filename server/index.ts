@@ -4,6 +4,7 @@ import type { FactorySpec } from '../src/spec';
 import { GeminiError, MODELS, type Block } from './gemini';
 import { deepSearch } from './agent';
 import { optimise } from './optimize';
+import { priceEquipment } from './shop';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 
 const app = express();
@@ -83,6 +84,17 @@ app.post('/api/deep-search', async (req, res) => {
     const { spec } = req.body as { spec: FactorySpec };
     if (!spec) return void res.status(400).json({ error: 'spec is required' });
     res.json(await deepSearch(spec));
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// Shop MCP: real listings and prices for each station type in the plan.
+app.post('/api/shop/price', async (req, res) => {
+  try {
+    const { spec } = req.body as { spec: FactorySpec };
+    if (!spec) return void res.status(400).json({ error: 'spec is required' });
+    res.json(await priceEquipment(spec));
   } catch (e) {
     fail(res, e);
   }

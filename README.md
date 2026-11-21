@@ -30,7 +30,10 @@ Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
       candidate op lists; failed ones get one repair round; the Decisions API
       gates them; survivors are simulated in parallel and ranked. Gated-out
       candidates are simulated too, so the gate can be audited.
-- [ ] Milestone 4: Shop MCP pricing and cart.
+- [x] **Milestone 4**: Shop MCP `search_catalog` prices real equipment per
+      station type, reads footprints from listing text, applies prices as
+      `setParam` ops, and builds a per-seller cart of checkout links
+      (`server/shop.ts`). Nothing is ordered.
 - [ ] Milestone 5: `/eval` (QAPLIB Nugent gap, validity rate, queue sanity).
 
 ## How it fits together

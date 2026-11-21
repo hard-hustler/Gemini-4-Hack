@@ -47,6 +47,25 @@ interface Proposal {
   stats: { proposed: number; firstPassValid: number; validAfterRepair: number; gateError?: string; ms: { propose: number; repair: number; gate: number; simulate: number; total: number } };
 }
 
+interface ShopOption {
+  title: string;
+  seller: string;
+  price: number;
+  rating?: number;
+  dims?: { w: number; d: number; text: string };
+  url: string;
+  checkoutUrl?: string;
+  image?: string;
+}
+interface ShopItem {
+  type: string;
+  query: string;
+  count: number;
+  currentPrice: number;
+  options: ShopOption[];
+  error?: string;
+}
+
 const describeOp = (op: EditOp): string => {
   switch (op.op) {
     case 'move':
@@ -176,6 +195,8 @@ export default function App() {
   const [confidence, setConfidence] = useState<Record<string, Confidence>>({});
   const [command, setCommand] = useState('');
   const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [shop, setShop] = useState<ShopItem[] | null>(null);
+  const [chosen, setChosen] = useState<Record<string, number>>({});
   const [recording, setRecording] = useState(false);
   const recorder = useRef<Recorder | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -239,12 +260,42 @@ export default function App() {
   const improve = () =>
     run('Neon is proposing improvements', async () => {
       setProposal(await api<Proposal>('/api/optimise', { spec: draft }));
+      setShop(null);
     });
+
+  /** Shop MCP: real listings for each station type in the draft. */
+  const priceWithShop = () =>
+    run('Searching Shop for real equipment', async () => {
+      const out = await api<{ items: ShopItem[] }>('/api/shop/price', { spec: draft });
+      setShop(out.items);
+      setChosen({});
+      setProposal(null);
+    });
+
+  /** Write the chosen listings' prices onto the stations, as setParam ops through the usual gate. */
+  const applyPrices = () => {
+    if (!shop) return;
+    let next = draft;
+    const lines: string[] = [];
+    for (const item of shop) {
+      const o = item.options[chosen[item.type] ?? 0];
+      if (!o) continue;
+      for (const st of draft.stations.filter((x) => x.type === item.type)) {
+        next = applyOp(next, { op: 'setParam', path: `stations.${st.id}.price`, value: o.price });
+      }
+      lines.push(`${item.type}: ${money(item.currentPrice)} -> ${money(o.price)} each`);
+    }
+    const errs = validate(next);
+    if (errs.length) return void setRejected(errs);
+    setDraft(next);
+    setNotice({ tone: 'ok', title: 'Real prices applied to the draft', lines });
+  };
 
   /** A managed agent runs the seeded search in parallel in its sandbox; the server re-checks every result. */
   const deepSearch = () =>
     run('Managed agent is searching in its sandbox (about a minute)', async () => {
       setProposal(await api<Proposal>('/api/deep-search', { spec: draft }));
+      setShop(null);
     });
 
   const applyCandidate = (c: Candidate) => {
@@ -344,6 +395,7 @@ export default function App() {
     setConfidence({});
     setNotice(null);
     setProposal(null);
+    setShop(null);
   };
 
   const sim = metrics.sim;
@@ -425,6 +477,9 @@ export default function App() {
           </button>
           <button disabled={!!busy} onClick={() => void deepSearch()}>
             Deep search (Managed Agent)
+          </button>
+          <button disabled={!!busy} onClick={() => void priceWithShop()}>
+            Price with Shop
           </button>
         </div>
         <div className="group">
@@ -517,6 +572,67 @@ export default function App() {
               )}
             </div>
           ))}
+        </aside>
+      )}
+
+      {shop && (
+        <aside className="proposal">
+          <header>
+            <b>Equipment from Shop</b>
+            <button onClick={() => setShop(null)}>Close</button>
+          </header>
+          {shop.map((item) => (
+            <div key={item.type} className="cand">
+              <div className="cand-head">
+                <b>
+                  {item.type} × {item.count}
+                </b>
+                <em>now {money(item.currentPrice)} each</em>
+              </div>
+              <span className="fine">searched "{item.query}"</span>
+              {item.error && <span className="warn">{item.error}</span>}
+              {item.options.map((o, i) => (
+                <label key={i} className="shop-option">
+                  <input type="radio" name={`shop-${item.type}`} checked={(chosen[item.type] ?? 0) === i} onChange={() => setChosen({ ...chosen, [item.type]: i })} />
+                  {o.image && <img src={o.image} alt="" />}
+                  <span>
+                    <b>{money(o.price)}</b> · {o.seller}
+                    {o.rating ? ` · ${o.rating}★` : ''}
+                    <br />
+                    {o.title.slice(0, 70)}
+                    <br />
+                    <i>{o.dims ? `${o.dims.w} × ${o.dims.d} m (listing says ${o.dims.text})` : 'no footprint in listing'}</i>{' '}
+                    <a href={o.url} target="_blank" rel="noreferrer">
+                      listing
+                    </a>
+                  </span>
+                </label>
+              ))}
+            </div>
+          ))}
+          <div className="cand">
+            <div className="cand-head">
+              <b>Cart for this version</b>
+              <b>{money(shop.reduce((t, item) => t + (item.options[chosen[item.type] ?? 0]?.price ?? 0) * item.count, 0))}</b>
+            </div>
+            {shop.map((item) => {
+              const o = item.options[chosen[item.type] ?? 0];
+              if (!o) return null;
+              const href = o.checkoutUrl ? o.checkoutUrl.replace(/:1(?=\?|$)/, `:${item.count}`) : o.url;
+              return (
+                <span key={item.type}>
+                  {item.count} × {item.type} · {money(o.price * item.count)} ·{' '}
+                  <a href={href} target="_blank" rel="noreferrer">
+                    {o.checkoutUrl ? `checkout at ${o.seller}` : 'open listing'}
+                  </a>
+                </span>
+              );
+            })}
+            <span className="fine">Items come from different sellers, so each line has its own checkout link. Nothing is ordered from here.</span>
+            <button className="primary" disabled={!!busy} onClick={applyPrices}>
+              Apply prices to draft
+            </button>
+          </div>
         </aside>
       )}
 
