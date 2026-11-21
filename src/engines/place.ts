@@ -345,8 +345,8 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
     // a conveyor line on a mid-size floor: room for the belts, then spread over the floor it was given
     ...(!large && req.transport === 'conveyor'
       ? [
-          { margin: 2.5, gap: 2, aisle: 3.5, bank: false, paired: false, greedy: false, spread: { gap: 4, aisle: 6 } },
-          { margin: 2, gap: 1.5, aisle: 3, bank: false, paired: false, greedy: false, spread: { gap: 3, aisle: 5 } },
+          { margin: 2.5, gap: 2, aisle: 3.5, bank: false, paired: false, greedy: false, spread: { gap: Math.max(4, width * 0.12), aisle: Math.max(6, depth * 0.3) } },
+          { margin: 2, gap: 1.5, aisle: 3, bank: false, paired: false, greedy: false, spread: { gap: Math.max(3, width * 0.09), aisle: Math.max(5, depth * 0.24) } },
         ]
       : []),
     { margin: 1.5, gap: 1.5, aisle: 2.5, bank: false, paired: false, greedy: false },

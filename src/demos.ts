@@ -33,7 +33,7 @@ export const DEMOS: Demo[] = [
     blurb: 'A mid-size line equipped from Shop: agents found a real CNC lathe, gantry mill, bandsaw and laser marker, and modelled each from its listing photo.',
     image: '/img/machine-shop.jpg',
     file: '/demos/machine-shop.json',
-    stats: ['27 stations', '30 × 20 m', '9 real listings', '59.4 parts an hour'],
+    stats: ['27 stations', '45 × 30 m', '9 real listings', '59.7 parts an hour'],
     scale: 'Line',
   },
   {

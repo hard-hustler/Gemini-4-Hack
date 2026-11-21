@@ -99,8 +99,9 @@ listing (a Hitachi Seiki CNC lathe, a Langmuir MR-1 gantry mill, a KAKA
 bandsaw, an OMTech fibre laser marker and others) and modelled it from the
 listing photo; the parts washer and the CMM had no listing that fit, so those
 two were designed from the process. Every listing is linked from the sourcing
-view and the equipment list. Laid out on 30 x 20 m with conveyors it simulates
-at 59.4 parts an hour against 60. To add one, open a
+view and the equipment list. Widened to 45 x 30 m and laid out with conveyors it
+simulates at 59.7 parts an hour against 60. The brief that recreates it is the
+"CNC machine shop" example on the brief screen. To add one, open a
 project with `?capture` in the URL and post it to `/api/dev/save` (a dev-only
 endpoint that writes under `public/demos` and `public/img`). The images on the
 landing page were captured the same way; all are renders of the harness's own

@@ -13,6 +13,10 @@ interface Attachment {
 
 const EXAMPLES = [
   {
+    label: 'CNC machine shop',
+    text: 'A machine shop that makes 60 machined aluminium bike-light housings an hour on compact CNC machines. Aluminium bar stock arrives at the west dock and is stored on pallet racks, cut to length on metal-cutting bandsaws, turned on CNC lathes (about 4 minutes a part), milled on CNC milling machines (about 9 minutes a part), tumbled in vibratory deburring machines, cleaned in parts washers, measured on coordinate measuring machines, serial-numbered on fibre laser marking machines, then packed and shipped from the east dock. One production line of about 27 stations on a floor 45 by 30 metres, with wide aisles.',
+  },
+  {
     label: 'Espresso grinder line',
     text: 'We assemble small espresso grinders. Parts arrive on pallets, get kitted, then burr sub-assembly, final assembly, a run-in test, then pack and ship. About 40 units an hour. The unit is 16 by 12 metres, roller door on the west side, shipping out the east. Water is on the south wall.',
   },
