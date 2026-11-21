@@ -16,19 +16,20 @@ import type {
 } from '../contracts';
 import { applyOps, dockPoint, footprint, snap, type EditOp, type FactorySpec, type Point, type Station } from '../spec';
 import { accessCells, astar, buildGrid, cellCentre, isFree, pointToCell, stationIndexById, type Cell, type Grid } from './grid';
+import { defaultRecipe } from '../machines';
 import type { Routes } from './route';
 import { simulate } from './simulate';
 import { validate } from './validate';
 import type { Metrics } from './versions';
 
-export const ADVOCATE_ROLES: AdvocateRole[] = ['stress', 'safety', 'cfo', 'compliance', 'maintenance'];
+export const ADVOCATE_ROLES: AdvocateRole[] = ['process', 'safety', 'electrical', 'utilities', 'machines'];
 
 export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
-  stress: {
-    role: 'stress',
+  process: {
+    role: 'process',
     name: 'Marcus Cole',
-    title: 'Stress & Bottleneck Breaker',
-    shortTitle: 'Stress Breaker',
+    title: 'Process engineer',
+    shortTitle: 'Process',
     accent: '#c97b1e',
     suitColor: '#363a42',
     vestColor: '#d98a24',
@@ -36,13 +37,13 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     skinColor: '#8d5d3e',
     prop: 'tablet',
     voice: 'Fenrir',
-    style: 'Direct, urgent plant operations engineer speaking clearly on the factory floor',
+    style: 'Senior process engineer reading out a design-review finding, plainly and without drama',
   },
   safety: {
     role: 'safety',
     name: 'Nadia Okafor',
-    title: 'Safety & Floor Flow Auditor',
-    shortTitle: 'Safety Auditor',
+    title: 'Safety officer',
+    shortTitle: 'Safety',
     accent: '#4f7a28',
     suitColor: '#2d333b',
     vestColor: '#98b836',
@@ -50,13 +51,13 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     skinColor: '#6f4630',
     prop: 'clipboard',
     voice: 'Kore',
-    style: 'Firm, authoritative EHS safety auditor doing a live floor inspection',
+    style: 'Senior safety officer reading out a design-review finding, plainly and without drama',
   },
-  cfo: {
-    role: 'cfo',
+  electrical: {
+    role: 'electrical',
     name: 'Victor Chen',
-    title: 'CFO & Unit-Economics Critic',
-    shortTitle: 'CFO Critic',
+    title: 'Electrical engineer',
+    shortTitle: 'Electrical',
     accent: '#3e5c76',
     suitColor: '#415061',
     vestColor: '#2c3745',
@@ -64,13 +65,13 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     skinColor: '#dcb697',
     prop: 'ledger',
     voice: 'Charon',
-    style: 'Crisp, analytical manufacturing CFO questioning capital spend and unit economics',
+    style: 'Senior electrical engineer reading out a design-review finding, plainly and without drama',
   },
-  compliance: {
-    role: 'compliance',
+  utilities: {
+    role: 'utilities',
     name: 'Priya Nair',
-    title: 'Brief & Requirements Compliance Checker',
-    shortTitle: 'Compliance',
+    title: 'Plumbing and air technician',
+    shortTitle: 'Plumbing & air',
     accent: '#2c4c7e',
     suitColor: '#2b4063',
     vestColor: '#3b5785',
@@ -78,13 +79,13 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     skinColor: '#a67452',
     prop: 'blueprint',
     voice: 'Zephyr',
-    style: 'Precise, calm industrial architect checking the floor against client specifications',
+    style: 'Senior plumbing and compressed-air technician reading out a design-review finding, plainly and without drama',
   },
-  maintenance: {
-    role: 'maintenance',
+  machines: {
+    role: 'machines',
     name: 'Hank Kowalski',
-    title: 'Maintenance & Downtime Skeptic',
-    shortTitle: 'Maintenance',
+    title: 'Machine technician',
+    shortTitle: 'Machines',
     accent: '#a9412e',
     suitColor: '#4c5749',
     vestColor: '#5e6b59',
@@ -92,13 +93,13 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     skinColor: '#dfb497',
     prop: 'wrench',
     voice: 'Puck',
-    style: 'Pragmatic, seasoned lead maintenance technician pointing out service traps',
+    style: 'Senior machine technician reading out a design-review finding, plainly and without drama',
   },
   fixer: {
     role: 'fixer',
     name: 'Elena Vasquez',
-    title: 'Surgical Layout Fixer',
-    shortTitle: 'Layout Fixer',
+    title: 'Layout engineer',
+    shortTitle: 'Layout',
     accent: '#df7f2e',
     suitColor: '#323539',
     vestColor: '#df7f2e',
@@ -195,7 +196,7 @@ export function runDeterministicAdvocateAudit(
     const shortfall = Math.max(0.1, demand - baseUph);
     findings.push({
       id: 'stress-demand-shortfall',
-      role: 'stress',
+      role: 'process',
       severity: 'blocker',
       title: `Throughput misses demand by ${shortfall.toFixed(1)} units/hr`,
       evidence: `Median output is ${baseUph.toFixed(1)} units/hr against a ${demand} units/hr target; ${hotType} is pegged at ${Math.round(sim.bottleneck.utilisation * 100)}%.`,
@@ -218,7 +219,7 @@ export function runDeterministicAdvocateAudit(
     const severity: AdvocateSeverity = surgeRatio < 0.84 || leadSpike >= 1.85 ? 'blocker' : 'warning';
     findings.push({
       id: 'stress-surge-20',
-      role: 'stress',
+      role: 'process',
       severity,
       title: `+20% demand surge collapses on ${surgeHot}`,
       evidence: `At ${surgeDemand} units/hr, output stalls at ${surgeSim.unitsPerHour.median.toFixed(1)} units/hr (${Math.round(surgeSim.bottleneck.utilisation * 100)}% util) and lead time jumps ${leadSpike.toFixed(2)}× to ${(surgeSim.leadTimeSec.median / 60).toFixed(1)} min.`,
@@ -243,7 +244,7 @@ export function runDeterministicAdvocateAudit(
       .map((s) => s.id);
     findings.push({
       id: 'stress-forklift-sat',
-      role: 'stress',
+      role: 'process',
       severity: forkUtil >= 0.9 ? 'blocker' : 'warning',
       title: `Forklift fleet saturated at ${Math.round(forkUtil * 100)}%`,
       evidence: `${spec.forklifts ?? 1} carrier${(spec.forklifts ?? 1) > 1 ? 's' : ''} haul ${routes.totals.forkliftM.toFixed(0)} m per unit (${cost.forkliftMPerHour.toFixed(0)} m/hr), risking downstream starvation.`,
@@ -329,7 +330,7 @@ export function runDeterministicAdvocateAudit(
     if (worstRun) {
       findings.push({
         id: `safety-utility-run-${worstRun.id}`,
-        role: 'safety',
+        role: worstRun.kind === 'power' ? 'electrical' : 'utilities',
         severity: worstRun.length >= 26 ? 'warning' : 'advisory',
         title: `Long ${worstRun.kind} run to ${worstRun.id} (${worstRun.length.toFixed(0)} m)`,
         evidence: `${worstRun.id} pulls ${worstRun.length.toFixed(1)} m of ${worstRun.kind} line across active aisles; total utility routing is ${totalUtilM.toFixed(0)} m ($${cost.utilityRunCost.toFixed(0)}).`,
@@ -345,12 +346,13 @@ export function runDeterministicAdvocateAudit(
   // ---- 3. VICTOR CHEN: CFO & Unit-Economics Critic ----
   for (const [type, list] of stationsByType.entries()) {
     const u = sim.utilisation[type] ?? 0;
-    if (list.length > 1 && u < 0.34) {
+    // support equipment has no place in the flow, so it has no utilisation to be low
+    if (list.length > 1 && u < 0.34 && spec.routing.includes(type)) {
       const capex = list[list.length - 1].price;
       const last = list[list.length - 1];
       findings.push({
         id: `cfo-idle-capex-${last.id}`,
-        role: 'cfo',
+        role: 'process',
         severity: u < 0.22 ? 'warning' : 'advisory',
         title: `Under-utilized ${type} CapEx (${Math.round(u * 100)}% across ${list.length} units)`,
         evidence: `${list.length} ${type} units run at only ${Math.round(u * 100)}% average load; retiring ${last.id} could reclaim $${capex.toLocaleString()} CapEx and operator wages.`,
@@ -368,7 +370,7 @@ export function runDeterministicAdvocateAudit(
   if (forklifts > 1 && forkUtil < 0.3) {
     findings.push({
       id: 'cfo-excess-forklift',
-      role: 'cfo',
+      role: 'process',
       severity: 'warning',
       title: `Excess forklift fleet (${forklifts} carriers at ${Math.round(forkUtil * 100)}% util)`,
       evidence: `Each extra carrier adds $${spec.costs.labourPerHour}/hr operator & fleet cost while utilization sits below 30%.`,
@@ -381,11 +383,12 @@ export function runDeterministicAdvocateAudit(
   }
 
   const utilShare = cost.utilityRunCost / Math.max(1, cost.buildCost);
-  if (utilShare >= 0.30 || routes.totals.forkliftM >= 42) {
+  // travel distance is a forklift cost; on a conveyor floor the belt is already costed by the metre
+  if (utilShare >= 0.30 || (spec.transport !== 'conveyor' && routes.totals.forkliftM >= 42)) {
     const target = longWater?.id ?? longPower?.id ?? spec.stations[0]?.id;
     findings.push({
       id: 'cfo-run-economics',
-      role: 'cfo',
+      role: 'process',
       severity: utilShare >= 0.34 ? 'warning' : 'advisory',
       title: `Layout inefficiency inflates build & transport cost`,
       evidence: `Utility runs consume ${Math.round(utilShare * 100)}% ($${cost.utilityRunCost.toFixed(0)}) of total $${cost.buildCost.toFixed(0)} build cost, and forklift travel is ${routes.totals.forkliftM.toFixed(0)} m/unit ($${cost.costPerUnit.toFixed(2)}/unit).`,
@@ -405,7 +408,7 @@ export function runDeterministicAdvocateAudit(
     if (missingTypes.length) {
       findings.push({
         id: 'compliance-missing-steps',
-        role: 'compliance',
+        role: 'process',
         severity: 'blocker',
         title: `Missing required process step: ${missingTypes.join(', ')}`,
         evidence: `The client brief requires ${requirements.steps.map((s) => s.type).join(' -> ')}, but the floor omits ${missingTypes.join(', ')}.`,
@@ -419,7 +422,7 @@ export function runDeterministicAdvocateAudit(
     if (Math.abs(spec.demandPerHour - requirements.demandPerHour) > 0.5) {
       findings.push({
         id: 'compliance-demand-drift',
-        role: 'compliance',
+        role: 'process',
         severity: 'warning',
         title: `Demand drifted from brief (${spec.demandPerHour} vs ${requirements.demandPerHour}/hr)`,
         evidence: `Client specification calls for ${requirements.demandPerHour} units/hr, while the simulation is currently set to ${spec.demandPerHour} units/hr.`,
@@ -460,7 +463,7 @@ export function runDeterministicAdvocateAudit(
       if (culprit && worstBacktrack >= 3.5) {
         findings.push({
           id: `compliance-flow-backtrack-${culprit.to}`,
-          role: 'compliance',
+          role: 'process',
           severity: worstBacktrack >= 7 ? 'warning' : 'advisory',
           title: `Process flow backtracks ${worstBacktrack.toFixed(1)} m into ${culprit.to}`,
           evidence: `Material travels ${worstBacktrack.toFixed(1)} m backwards against the Receiving-to-Shipping axis between ${culprit.from} and ${culprit.to}.`,
@@ -478,7 +481,8 @@ export function runDeterministicAdvocateAudit(
   const boxedStations: { s: Station; openSides: number; blocked: string[] }[] = [];
   spec.stations.forEach((s, i) => {
     const { openSides, blockedSides } = countAccessibleSides(spec, grid, i);
-    if (openSides <= 1 && (s.powerKw > 0 || s.needsWater || s.type !== 'storage')) {
+    // only process machines: support equipment is put where it fits, against whatever it serves
+    if (openSides <= 1 && spec.routing.includes(s.type) && (s.powerKw > 0 || s.needsWater || s.type !== 'storage')) {
       boxedStations.push({ s, openSides, blocked: blockedSides });
     }
   });
@@ -486,7 +490,7 @@ export function runDeterministicAdvocateAudit(
     const worst = boxedStations.sort((a, b) => a.openSides - b.openSides)[0];
     findings.push({
       id: `maintenance-boxed-${worst.s.id}`,
-      role: 'maintenance',
+      role: 'machines',
       severity: worst.openSides === 0 ? 'blocker' : 'warning',
       title: `Zero rear/side service access on ${worst.s.id}`,
       evidence: `${stationLabel(worst.s)} is blocked on ${worst.blocked.join(', ')} (${worst.openSides}/4 sides open). Technicians cannot pull panels or service drives without moving adjacent equipment.`,
@@ -501,14 +505,15 @@ export function runDeterministicAdvocateAudit(
   // Single-point-of-failure critical machine (zero redundancy)
   const spofStages = [...stationsByType.entries()]
     .map(([type, list]) => ({ type, list, util: sim.utilisation[type] ?? 0 }))
-    .filter((x) => x.list.length === 1 && x.util >= 0.62)
+    // a rack or a bench has nothing to break down: only powered machines count
+    .filter((x) => x.list.length === 1 && x.util >= 0.62 && x.list[0].powerKw > 0)
     .sort((a, b) => b.util - a.util);
   if (spofStages.length) {
     const top = spofStages[0];
     const st = top.list[0];
     findings.push({
       id: `maintenance-spof-${st.id}`,
-      role: 'maintenance',
+      role: 'machines',
       severity: top.util >= 0.84 ? 'blocker' : 'warning',
       title: `Zero redundancy on ${st.id} (${Math.round(top.util * 100)}% load)`,
       evidence: `${stationLabel(st)} is the sole ${top.type} unit handling ${Math.round(top.util * 100)}% utilization; any unplanned stop halts 100% of downstream output with no bypass.`,
@@ -520,9 +525,15 @@ export function runDeterministicAdvocateAudit(
     });
   }
 
-  // Sort findings by severity (blocker -> warning -> advisory) then role order
-  findings.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || ADVOCATE_ROLES.indexOf(a.role) - ADVOCATE_ROLES.indexOf(b.role));
+  return { ...buildReport(spec, findings, 'deterministic'), ms: Date.now() - t0 };
+}
 
+/**
+ * A report from a list of findings: worst first, counted, with the crew's routes to what each found.
+ * Used for the measured audit, for the full eval, and to carry findings across a fix.
+ */
+export function buildReport(spec: FactorySpec, list: AdvocateFinding[], mode: AdvocateReport['mode'], preferred?: Partial<Record<AdvocateRole, string>>): AdvocateReport {
+  const findings = [...list].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || ADVOCATE_ROLES.indexOf(a.role) - ADVOCATE_ROLES.indexOf(b.role));
   const blockerCount = findings.filter((f) => f.severity === 'blocker').length;
   const warningCount = findings.filter((f) => f.severity === 'warning').length;
   const advisoryCount = findings.filter((f) => f.severity === 'advisory').length;
@@ -533,29 +544,47 @@ export function runDeterministicAdvocateAudit(
     const blockers = mine.filter((f) => f.severity === 'blocker').length;
     const warnings = mine.filter((f) => f.severity === 'warning').length;
     const v: AdvocateVerdict = blockers > 0 ? 'veto' : warnings > 0 ? 'warn' : 'pass';
-    const note = mine.length ? mine[0].title : 'No material defects flagged on this floor.';
-    return { role, verdict: v, findingCount: mine.length, blockerCount: blockers, note };
+    return { role, verdict: v, findingCount: mine.length, blockerCount: blockers, note: mine.length ? mine[0].title : 'Nothing found.' };
   });
 
-  const walkPlans = computeCharacterWalkPlans(spec, findings);
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const summary =
     blockerCount > 0
-      ? `${blockerCount} blocking objection${blockerCount > 1 ? 's' : ''} and ${warningCount} warning${warningCount === 1 ? '' : 's'} across 5 inspectors.`
+      ? `${plural(blockerCount, 'blocker')} and ${plural(warningCount, 'warning')} to clear before build.`
       : warningCount > 0
-        ? `No hard blockers, but ${warningCount} warning${warningCount === 1 ? '' : 's'} need attention before build.`
-        : 'All 5 devil’s advocate inspectors cleared this layout.';
+        ? `No blockers. ${plural(warningCount, 'warning')} to look at before build.`
+        : findings.length
+          ? `No blockers or warnings. ${plural(advisoryCount, 'note')}.`
+          : 'Nothing found.';
 
+  return { verdict, summary, blockerCount, warningCount, advisoryCount, findings, agentVerdicts, walkPlans: computeCharacterWalkPlans(spec, findings, undefined, preferred), ms: 0, mode };
+}
+
+/**
+ * Where each technician starts looking, before anyone has found anything: the machine their trade
+ * cares most about. Process goes to the bottleneck, electrical to the biggest load, and so on.
+ */
+export function crewStartTargets(spec: FactorySpec, metrics: Metrics): Partial<Record<AdvocateRole, string>> {
+  const st = spec.stations;
+  if (!st.length) return {};
+  const util = metrics.sim.utilisation;
+  const byUtil = [...st].sort((a, b) => (util[b.type] ?? 0) - (util[a.type] ?? 0));
+  const wallGap = (s: Station) => {
+    const f = footprint(s);
+    return Math.min(f.x, f.y, spec.floor.width - f.x - f.w, spec.floor.depth - f.y - f.d);
+  };
+  const taken = new Set<string>();
+  const pick = (order: Station[]) => {
+    const s = order.find((x) => !taken.has(x.id)) ?? order[0];
+    taken.add(s.id);
+    return s.id;
+  };
   return {
-    verdict,
-    summary,
-    blockerCount,
-    warningCount,
-    advisoryCount,
-    findings,
-    agentVerdicts,
-    walkPlans,
-    ms: Date.now() - t0,
-    mode: 'deterministic',
+    process: pick(st.filter((s) => s.type === metrics.sim.bottleneck.name).concat(byUtil)),
+    electrical: pick([...st].sort((a, b) => b.powerKw - a.powerKw)),
+    utilities: pick(st.filter((s) => s.needsWater).concat([...st].sort((a, b) => b.w * b.d - a.w * a.d))),
+    machines: pick(byUtil),
+    safety: pick([...st].sort((a, b) => wallGap(a) - wallGap(b))),
   };
 }
 
@@ -598,6 +627,8 @@ export function computeCharacterWalkPlans(
   spec: FactorySpec,
   findings: AdvocateFinding[],
   fixerTargetIds?: string[],
+  /** where a technician with nothing to point at should stand instead */
+  preferred?: Partial<Record<AdvocateRole, string>>,
 ): CharacterWalkPlan[] {
   const grid = buildGrid(spec);
   const usedStarts = new Set<string>();
@@ -612,7 +643,8 @@ export function computeCharacterWalkPlans(
     const explicitTargetId = role === 'fixer' ? fixerTargetIds?.[0] ?? null : primary?.targetIds[0] ?? null;
 
     // Pick a fallback station when an agent has 0 findings so they still patrol a meaningful zone
-    const fallbackStation = spec.stations[idx % Math.max(1, spec.stations.length)] ?? null;
+    const want = role === 'fixer' ? undefined : preferred?.[role];
+    const fallbackStation = (want ? spec.stations.find((x) => x.id === want) : null) ?? spec.stations[idx % Math.max(1, spec.stations.length)] ?? null;
     const targetStation = (explicitTargetId ? spec.stations.find((s) => s.id === explicitTargetId) : null) ?? fallbackStation;
     const stIndex = targetStation ? stationIndexById(spec, targetStation.id) : -1;
 
@@ -692,6 +724,53 @@ function findValidPlacement(spec: FactorySpec, candidateStation: Station, near: 
     if (validate(next).length === 0) return { x: spot.x, y: spot.y };
   }
   return null;
+}
+
+/**
+ * Put the equipment a finding says is missing onto the floor, as close to the machine it serves as
+ * the layout rules allow. Code picks the spot; the technician only said what was missing.
+ */
+export function addSupportEquipment(spec: FactorySpec, finding: AdvocateFinding): { spec: FactorySpec; ops: EditOp[]; station: Station } | null {
+  if (finding.fix?.kind !== 'equipment') return null;
+  const eq = finding.fix.equipment;
+  const cell = spec.floor.cellSize;
+  const size = (v: number) => Math.max(cell, snap(Math.min(Math.max(v, 0.3), 8), cell));
+  // a short id from the unit's name: "22 kW screw compressor with dryer" -> screwcompressor
+  const words = eq.name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w && !/\d/.test(w) && !['kw', 'kva', 'hp', 'kg', 'with', 'and', 'the', 'for', 'of'].includes(w));
+  const type = (words.slice(0, 2).join('') || 'support').slice(0, 20);
+  let n = 1;
+  while (spec.stations.some((s) => s.id === `${type}${n}`)) n++;
+  const target = spec.stations.find((s) => s.id === finding.targetIds[0]);
+  const station: Station = {
+    id: `${type}${n}`,
+    type,
+    x: 0,
+    y: 0,
+    w: size(eq.w),
+    d: size(eq.d),
+    rot: 0,
+    // not a process step, so its cycle time is never used; the layout rules only require it to be positive
+    cycleTimeSec: 1,
+    operators: 0,
+    powerKw: Math.max(0, eq.powerKw),
+    needsWater: eq.needsWater,
+    price: Math.max(0, Math.round(eq.price)),
+    zone: target?.zone,
+    name: eq.name,
+    height: Math.min(Math.max(eq.h, 0.4), 4),
+  };
+  // drawn from its name: the catalog reads "collector", "compressor", "cabinet" and picks a shape
+  station.recipe = defaultRecipe(type, { w: station.w, d: station.d, h: station.height ?? 1.5 }, undefined, eq.name);
+  // plant-wide equipment (a generator, a main panel) goes by the wall its utility comes in through
+  const near = target ? stationCenter(target) : eq.needsWater && !eq.powerKw ? spec.utilityEntry.water : spec.utilityEntry.power;
+  const spot = findValidPlacement(spec, station, near);
+  if (!spot) return null;
+  const placed = { ...station, x: spot.x, y: spot.y };
+  const ops: EditOp[] = [{ op: 'add', station: placed }];
+  return { spec: applyOps(spec, ops), ops, station: placed };
 }
 
 export interface DeterministicFixCandidate {

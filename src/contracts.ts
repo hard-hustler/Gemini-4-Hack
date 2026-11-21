@@ -148,6 +148,8 @@ export interface TraceEvent {
   detail?: string;
   ms: number;
   /** 'running' is only ever streamed: it says what is in flight and is replaced by the next event */
+  /** which crew member this step belongs to, when it is one of theirs */
+  who?: string;
   status: 'ok' | 'retry' | 'fail' | 'running';
 }
 
@@ -163,7 +165,8 @@ export interface PlanResult {
 
 // ---- Devil's Advocate Review, Surgical Fixer, and 3D Floor Crew ----
 
-export type AdvocateRole = 'stress' | 'safety' | 'cfo' | 'compliance' | 'maintenance';
+/** The five technicians of the eval crew, by what each inspects. */
+export type AdvocateRole = 'process' | 'safety' | 'electrical' | 'utilities' | 'machines';
 export type CharacterRole = AdvocateRole | 'fixer';
 export type AdvocateSeverity = 'blocker' | 'warning' | 'advisory';
 export type AdvocateVerdict = 'pass' | 'warn' | 'veto';
@@ -184,6 +187,23 @@ export interface AdvocateCharacter {
   style: string;
 }
 
+/** A floor-standing unit a finding says is missing: a dust collector, a generator, an air compressor. */
+export interface SupportEquipment {
+  name: string;
+  w: number;
+  d: number;
+  h: number;
+  powerKw: number;
+  needsWater: boolean;
+  price: number;
+}
+
+/**
+ * How a finding gets fixed. "layout": move things, verified by simulation. "equipment": add the
+ * missing unit, placed by code. "spec": a design or procedure change the user signs off on.
+ */
+export type FindingFix = { kind: 'layout' } | { kind: 'equipment'; equipment: SupportEquipment } | { kind: 'spec' };
+
 export interface AdvocateFinding {
   id: string;
   role: AdvocateRole;
@@ -193,10 +213,14 @@ export interface AdvocateFinding {
   metricDeltaHint: string;
   targetIds: string[];
   suggestedFixHint: string;
-  /** First-person critique delivered aloud by the 3D floor character */
+  /** the corrective action, as one imperative sentence */
+  action?: string;
+  fix?: FindingFix;
+  /** Read aloud by the 3D floor character */
   spokenLine: string;
-  /** Calibrated risk probability from Gemini Decisions API when full audit runs */
+  /** Decisions API: probability that the finding is a specific, checkable defect of this design rather than generic advice */
   decisionConfidence?: number;
+  /** deterministic: measured by the engines. gemini: written by a technician agent and passed by the checker. */
   source: 'deterministic' | 'gemini';
 }
 
@@ -250,6 +274,8 @@ export interface FixProposal {
   spec: FactorySpec;
   deltas: MetricDeltas;
   resolvedCount: number;
+  /** ids of the findings this fix clears */
+  resolvedIds?: string[];
   remainingBlockers: number;
   remainingWarnings: number;
   postAudit: AdvocateReport;

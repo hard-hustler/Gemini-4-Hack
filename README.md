@@ -84,6 +84,56 @@ stations, 180 x 120 m), every machine designed by the swarm (54 to 101 parts
 each), simulated at 26.9 cars an hour against 30 once laid out across the
 whole floor.
 
+## Evals: the crew
+
+Nothing inspects a layout until you click **Run evals** in the simulation's
+Evals tab. That deploys five technician agents onto the floor, each walking to
+the machine their trade cares most about, with a note over their head that
+shows what they are writing and then what they found.
+
+| Technician | Looks at |
+| --- | --- |
+| Process engineer | rate match between steps, machine fit for the part, handling, buffers |
+| Safety officer | guarding, exposure to mist, dust, fume and noise, fire, escape |
+| Electrical engineer | supply voltage and phase, load, protection, backup power |
+| Plumbing and air technician | water, drains, coolant, compressed air, extraction |
+| Machine technician | foundations, service clearance, vibration, upkeep, single points of failure |
+
+Each gets the same plant sheet (`plantSheet` in `server/advocate.ts`): one
+line per machine with its make and model, footprint, power, water, duty,
+distance to its neighbour and to the wall, plus the utilities and what support
+equipment is already on the floor. The prompt is the trade, not a persona:
+name one machine, state the defect with the number behind it, give one action
+a contractor could act on, and write nothing that would be true of any factory.
+
+- **Builders propose.** Five `gemini-4-neon` calls in parallel, at most four
+  findings each, one per machine. Code rejects findings that name a machine
+  that does not exist, and merges two technicians asking for the same unit.
+- **A checker decides.** `gemini-decision-1` sees the sheet and one finding at
+  a time and scores whether it is a specific, checkable defect of this design
+  or generic advice. Below 50% it is dropped; the score is shown on the finding.
+- **The engines measure.** Throughput against demand, wall pinches, long
+  utility runs, backtracking flow and boxed-in machines are computed, not
+  written, and are marked "measured".
+
+Every finding carries its fix, and how it is fixed depends on what it is:
+
+- **Missing equipment** (a compressor, an eye-wash, a UPS): *Add it* places the
+  unit beside the machine it serves, at a spot code checks against every
+  layout rule, and shows the cost before you save it.
+- **Layout** (a CMM too close to a washer, a machine with no service access):
+  *Preview fix* has a model propose moves, which are validated, simulated and
+  compared before you save them.
+- **A design or procedure change** (a 200 V transformer for the lathes, an
+  interlocked laser enclosure): *Mark done* once it is in the spec.
+
+On the machine shop demo a run takes about a minute and returns around twenty
+findings, for example that the Hitachi Seiki lathes are 200 V machines on a
+plant with no step-down transformer, that the 30 W fibre laser is an open
+Class 4 beam with no enclosure, and that the CMM sits 2 m from the heated
+parts washer. The improve loop still gates each change it keeps, but only on
+the measured checks; it does not deploy the crew.
+
 ## Demos
 
 Projects the harness generated are saved in `public/demos/` and listed in

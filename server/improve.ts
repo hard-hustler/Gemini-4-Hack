@@ -1,12 +1,12 @@
-// Goal-driven improve loop with an automatic 5-agent Devil's Advocate gate.
+// Goal-driven improve loop, gated by the measured checks.
 // One run is several rounds of:
 //
-//   Neon proposes changes for the goal (seeing earlier results + any Devil's Advocate vetoes)
+//   Neon proposes changes for the goal (seeing earlier results + any vetoes from the measured checks)
 //     -> validate() rejects anything that breaks a layout rule
 //     -> Decisions API scores survivors before simulation (the cheap gate)
 //     -> seeded local search adds its own candidate
 //     -> the simulator scores everything that passed the gate
-//     -> 5-Agent Devil's Advocate panel automatically gates the winning candidate before promotion
+//     -> the measured checks gate the winning candidate before it is kept
 //        (Blockers veto promotion and feed exact objections into the next round)
 //
 // The loop stops when a round finds nothing better that clears the gate, or after MAX_ROUNDS.
@@ -88,16 +88,16 @@ export async function improveToGoal(start: FactorySpec, goal: Goal, emit: Emit, 
   latestAudit = baselineAudit;
   if (baselineAudit.findings.length > 0) {
     history.push(
-      `Devil's Advocate baseline findings to fix if possible: ${baselineAudit.findings
+      `Measured findings on the starting layout, to fix if possible: ${baselineAudit.findings
         .slice(0, 4)
         .map((f) => `[${ADVOCATE_CHARACTERS[f.role].name} - ${f.severity}] ${f.title}`)
         .join('; ')}`,
     );
   }
 
-  const system = `You improve a factory layout toward one goal, over several rounds. Each round you get the current best FactorySpec, its simulated metrics, and what earlier rounds tried with measured results and any Devil's Advocate inspector vetoes. Propose ${PER_ROUND} different candidate changes, each a short list of edit ops with a one-line reason. Never describe a layout in prose.
+  const system = `You improve a factory layout toward one goal, over several rounds. Each round you get the current best FactorySpec, its simulated metrics, and what earlier rounds tried with measured results and any vetoes from the measured checks. Propose ${PER_ROUND} different candidate changes, each a short list of edit ops with a one-line reason. Never describe a layout in prose.
 Goal: ${GOALS[goal].brief} Throughput must not fall below demand.
-Devil's Advocate constraints: keep stations either flush against outer walls (0 m) or at least 1.5 m clear (avoid 0.2–1.1 m wall pinch traps); preserve service access on powered machines; maintain +20% surge headroom where possible.
+Layout constraints: keep stations either flush against outer walls (0 m) or at least 1.5 m clear (avoid 0.2–1.1 m wall pinch traps); preserve service access on powered machines; maintain +20% surge headroom where possible.
 Learn from the history: do not repeat a change that was rejected, vetoed, or made things worse; build on what was kept.
 Levers: shorten travel by putting consecutive steps near each other and near the right dock; shorten power and water runs; relieve the busiest step. When throughput is below demand, the fix is capacity at the bottleneck: clone a station of the busiest step. A clone costs money up front and an operator every hour, so add only what demand needs.
 Ops: move {id,x,y}; rotate {id,rot}; clone {id} (one more station identical to id; code places it beside the original); remove {id}; moveDock {index,wall,offset}; setParam {path,value} (path: forklifts or stations.<id>.<field>). Do not use add. Set fields an op does not use to null. Do not change demandPerHour or costs.
@@ -220,7 +220,7 @@ ${GEOMETRY_RULES}`;
     ).filter((x): x is NonNullable<typeof x> => !!x);
     scored.sort((a, b) => a.score - b.score);
 
-    // 6. Automatic 5-agent Devil's Advocate Gate on improving candidates
+    // 6. The measured checks gate each improving candidate
     let accepted: (typeof scored)[number] | null = null;
     let roundVerdict: AdvocateReport['verdict'] | undefined;
     const improvingCandidates = scored.filter((c) => c.score < best.score * 0.997).slice(0, 2);
@@ -238,7 +238,7 @@ ${GEOMETRY_RULES}`;
         emit({
           stage: 'advocate',
           actor: 'advocate',
-          title: `Round ${n}: Devil’s Advocate vetoed “${cand.t.name}”`,
+          title: `Round ${n}: “${cand.t.name}” failed the measured checks`,
           detail: cand.t.vetoReasons.join(' · '),
           ms: audit.ms,
           status: 'fail',
@@ -256,7 +256,7 @@ ${GEOMETRY_RULES}`;
         t.outcome === 'rejected'
           ? `rejected by layout rules: ${(t.errors ?? []).join('; ')}`
           : t.outcome === 'vetoed'
-            ? `VETOED by Devil's Advocate: ${(t.vetoReasons ?? []).join('; ')}`
+            ? `VETOED by the measured checks: ${(t.vetoReasons ?? []).join('; ')}`
             : t.outcome === 'gated out'
               ? 'not simulated (low pre-check score)'
               : `simulated: lead ${sign(t.deltas!.leadMin)} min, cost/unit ${sign(t.deltas!.costPerUnit, 2)}, build ${sign(t.deltas!.buildCost, 0)}, units/h ${sign(t.deltas!.uph)} vs the starting layout`;
@@ -271,7 +271,7 @@ ${GEOMETRY_RULES}`;
       emit({
         stage: 'improve',
         actor: 'engine',
-        title: `Round ${n}: kept “${accepted.t.name}” (cleared Devil’s Advocate gate)`,
+        title: `Round ${n}: kept “${accepted.t.name}” (passed the measured checks)`,
         detail: `vs the start: lead ${sign(d.leadMin)} min, cost per unit ${sign(d.costPerUnit, 2)}, build ${sign(d.buildCost, 0)}, ${sign(d.uph)} units/h`,
         ms: Date.now() - simStart,
         status: 'ok',
@@ -281,7 +281,7 @@ ${GEOMETRY_RULES}`;
       emit({
         stage: 'improve',
         actor: 'engine',
-        title: hadVeto ? `Round ${n}: improving candidates were vetoed by Devil’s Advocate` : `Round ${n}: nothing beat the current layout`,
+        title: hadVeto ? `Round ${n}: improving candidates failed the measured checks` : `Round ${n}: nothing beat the current layout`,
         detail: scored.length ? `best simulated was “${scored[0].t.name}”` : 'no candidate reached the simulator',
         ms: Date.now() - simStart,
         status: hadVeto ? 'retry' : 'ok',
@@ -291,7 +291,7 @@ ${GEOMETRY_RULES}`;
     if (!accepted) {
       const hadVeto = tried.some((t) => t.outcome === 'vetoed');
       if (!hadVeto || n === MAX_ROUNDS) {
-        stopped = hadVeto ? `round ${n} candidates were vetoed by the Devil’s Advocate panel` : `round ${n} found nothing better`;
+        stopped = hadVeto ? `round ${n} candidates failed the measured checks` : `round ${n} found nothing better`;
         break;
       }
       // If vetoed before MAX_ROUNDS, continue to next round so Neon sees the veto reasons and cures them!

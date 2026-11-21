@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AdvocateFinding, AdvocateReport, AdvocateRole, CharacterRole, FixProposal, TraceEvent } from '../contracts';
-import { ADVOCATE_CHARACTERS, ADVOCATE_ROLES, runDeterministicAdvocateAudit } from '../engines/advocate';
+import { addSupportEquipment, ADVOCATE_CHARACTERS, ADVOCATE_ROLES, buildReport, computeCharacterWalkPlans, crewStartTargets, runDeterministicAdvocateAudit } from '../engines/advocate';
 import { compare, evaluate, makeVersion, type Version } from '../engines/versions';
 import { validate, type ValidationError } from '../engines/validate';
 import { applyOp, type EditOp, type FactorySpec } from '../spec';
@@ -8,6 +8,7 @@ import { api, apiStream, ApiError, money, num, type Project } from '../store';
 import { startRecording, type Recorder } from '../ui/audio';
 import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
 import { Icon } from '../ui/icons';
+import type { CrewBubble } from '../ui/AdvocateCharacters';
 import { Scene, type Layers } from '../ui/Scene';
 
 type Goal = 'cost' | 'lead' | 'build';
@@ -60,7 +61,7 @@ const describeOp = (op: EditOp): string => {
     case 'rotate':
       return `Turned ${op.id} to ${op.rot}°`;
     case 'add':
-      return `Added ${op.station.id} (${op.station.type})`;
+      return op.station.name && op.station.name.toLowerCase().replace(/[^a-z]/g, '') !== op.station.type ? `Added ${op.station.name} at ${op.station.x}, ${op.station.y}${op.station.price ? ` · ${money(op.station.price)}` : ''}` : `Added ${op.station.id} (${op.station.type})`;
     case 'remove':
       return `Removed ${op.id}`;
     case 'moveDock':
@@ -85,7 +86,13 @@ function useNarrow() {
   return narrow;
 }
 
-type Tab = 'overview' | 'improve' | 'equipment' | 'versions';
+type Tab = 'overview' | 'improve' | 'evals' | 'equipment' | 'versions';
+
+/** What one technician is doing while the evals run. */
+type CrewLive = Partial<Record<AdvocateRole, { state: 'writing' | 'done' | 'failed'; text: string; top?: string }>>;
+
+/** How a finding gets fixed: measured ones by moving things, the rest as the technician said. */
+const fixKind = (f: AdvocateFinding) => f.fix?.kind ?? (f.source === 'deterministic' ? 'layout' : 'spec');
 const GOALS: { id: Goal; label: string }[] = [
   { id: 'cost', label: 'Cost per unit' },
   { id: 'lead', label: 'Lead time' },
@@ -216,8 +223,10 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const [sandbox, setSandbox] = useState<SandboxResult | null>(null);
   const [cmp, setCmp] = useState<{ a: string; b: string } | null>(null);
 
-  // Devil's Advocate, Surgical Fixer, and Real-Time Character Voice state
+  // Evals: the crew's report (null until Run evals is clicked), what each of them is doing meanwhile, fixes, voice
   const [serverAudit, setServerAudit] = useState<AdvocateReport | null>(null);
+  const [crewLive, setCrewLive] = useState<CrewLive>({});
+  const keepAudit = useRef<{ id: string; report: AdvocateReport } | null>(null);
   const [roleFilter, setRoleFilter] = useState<AdvocateRole | 'all'>('all');
   const [activeFindingId, setActiveFindingId] = useState<string | null>(null);
   const [fixProposal, setFixProposal] = useState<FixProposal | null>(null);
@@ -238,7 +247,9 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   useEffect(() => {
     setDraft(current.spec);
     setRejected([]);
-    setServerAudit(null);
+    // a fix saved as a new version brings its remaining findings with it; any other version starts with no evals
+    setServerAudit(keepAudit.current?.id === current.id ? keepAudit.current.report : null);
+    keepAudit.current = null;
     setFixProposal(null);
   }, [current.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -262,13 +273,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const sim = metrics.sim;
   const dirty = JSON.stringify(draft) !== JSON.stringify(current.spec);
 
-  // Live deterministic 5-agent audit so characters walk the floor immediately
-  const deterministicAudit = useMemo<AdvocateReport | null>(() => {
-    if (!evaluation.ok) return null;
-    return runDeterministicAdvocateAudit(draft, evaluation.metrics, evaluation.routes, project.requirements);
-  }, [draft, evaluation, project.requirements]);
-
-  const activeAudit = fixProposal ? fixProposal.postAudit : serverAudit ?? deterministicAudit;
+  // The crew is only on the floor once evals have been run on this layout.
+  const activeAudit = fixProposal ? fixProposal.postAudit : serverAudit;
   const shown = preview ?? fixProposal?.spec ?? draft;
   const shownEval = useMemo(() => (fixProposal ? evaluate(fixProposal.spec, 12) : evaluation), [fixProposal, evaluation]);
   const shownRoutes = !preview && shownEval.ok ? shownEval.routes : null;
@@ -300,6 +306,33 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     ? 'fixer'
     : speech?.role ?? activeFinding?.role ?? (roleFilter !== 'all' ? roleFilter : null);
   const speakingRole: CharacterRole | null = speech && (speech.playing || speech.loading) ? speech.role : null;
+
+  const evalRunning = run.busy && mode === 'audit';
+  // While the evals run each technician walks to the machine their trade cares most about; afterwards, to what they found.
+  const crewPlans = useMemo(() => {
+    if (activeAudit) return activeAudit.walkPlans;
+    if (evalRunning && evaluation.ok) return computeCharacterWalkPlans(draft, [], undefined, crewStartTargets(draft, evaluation.metrics));
+    return [];
+  }, [activeAudit, evalRunning, draft, evaluation]);
+  // The note over each technician's head: what they are doing, then what they found.
+  const bubbles = useMemo(() => {
+    const out: Partial<Record<CharacterRole, CrewBubble>> = {};
+    if (evalRunning) {
+      for (const role of ADVOCATE_ROLES) {
+        const st = crewLive[role];
+        out[role] = !st || st.state === 'writing' ? { text: 'writing', tone: 'writing' } : st.state === 'failed' ? { text: 'Could not finish', tone: 'clear' } : { text: st.top ?? 'Nothing found', tone: st.top ? 'warning' : 'clear' };
+      }
+      return out;
+    }
+    if (!activeAudit) return out;
+    for (const role of ADVOCATE_ROLES) {
+      const mine = findings.filter((f) => f.role === role);
+      const focus = activeFinding?.role === role ? activeFinding : mine[0];
+      out[role] = focus ? { text: mine.length > 1 && focus.id !== activeFindingId ? `${mine.length} issues. ${focus.title}` : focus.title, tone: focus.severity } : { text: 'Nothing found', tone: 'clear' };
+    }
+    if (fixProposal) out.fixer = { text: fixProposal.summary.split(' — ')[0], tone: 'clear' };
+    return out;
+  }, [evalRunning, crewLive, activeAudit, findings, activeFinding, activeFindingId, fixProposal]);
 
   /** Speak a line as one of the 6 3D floor characters via Gemini 3.8 TTS (/api/advocate/speak). */
   const speakAs = useCallback(
@@ -397,7 +430,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
 
   const handleSelectCharacter = useCallback(
     (role: CharacterRole) => {
-      setTab('improve');
+      setTab('evals');
       if (role === 'fixer' && fixProposal) {
         void speakAs('fixer', fixProposal.spokenSummary, 'Proposed fix');
         return;
@@ -408,18 +441,23 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
         hearFinding(match);
       } else {
         const char = ADVOCATE_CHARACTERS[role];
-        void speakAs(role, `I am ${char.name}, ${char.title}. I have no open objections on this floor right now.`, 'Floor clear');
+        void speakAs(role, `${char.title}: nothing found on this floor.`, 'Nothing found');
       }
     },
     [findings, fixProposal, hearFinding, speakAs],
   );
 
   /** Run a streamed harness call; its steps land in the tracker live and in the project's run log after. */
-  const call = async <T,>(label: string, path: string, body: unknown): Promise<T | null> => {
+  const call = async <T,>(label: string, path: string, body: unknown, tap?: (e: TraceEvent) => void): Promise<T | null> => {
     setNotice(null);
     let events: TraceEvent[] = [];
     try {
-      const out = await run.run(label, (onEvent) => apiStream<T>(path, body, onEvent));
+      const out = await run.run(label, (onEvent) =>
+        apiStream<T>(path, body, (e) => {
+          tap?.(e);
+          onEvent(e);
+        }),
+      );
       events = out.events;
       return out.value;
     } catch (e) {
@@ -500,43 +538,90 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     }
   };
 
-  /** Full 5-agent Devil's Advocate audit with Gemini Decisions calibration + Neon spoken briefings. */
-  const runFullAudit = async () => {
+  /** Run evals: deploy the crew. Five technician agents inspect the floor; a checker filters what they write. */
+  const runEvals = async () => {
+    setTab('evals');
     setMode('audit');
     setFixProposal(null);
+    setServerAudit(null);
+    setActiveFindingId(null);
+    setCrewLive({});
     setLayers((l) => ({ ...l, crew: true }));
-    const out = await call<AdvocateReport>('5 inspectors auditing floor', '/api/advocate/audit', {
-      spec: draft,
-      requirements: project.requirements,
+    const out = await call<AdvocateReport>('Technicians inspecting the floor', '/api/advocate/audit', { spec: draft, requirements: project.requirements }, (e) => {
+      if (!e.who) return;
+      const role = e.who as AdvocateRole;
+      const rest = e.title.slice(ADVOCATE_CHARACTERS[role]?.name.length ?? 0).replace(/^[:\s]+(is )?/, '');
+      setCrewLive((cur) => ({ ...cur, [role]: e.status === 'running' ? { state: 'writing', text: rest } : e.status === 'fail' && e.actor === 'neon' ? { state: 'failed', text: 'could not finish' } : { state: 'done', text: rest, top: e.detail } }));
     });
+    setMode(null);
     if (!out) return;
     setServerAudit(out);
-    if (out.findings.length > 0) {
-      setActiveFindingId(out.findings[0].id);
-      setNotice({
-        tone: out.verdict === 'veto' ? 'error' : 'ok',
-        title: `Devil’s Advocate audit: ${out.blockerCount} blocker${out.blockerCount === 1 ? '' : 's'}, ${out.warningCount} warning${out.warningCount === 1 ? '' : 's'}`,
-        lines: [out.summary],
-      });
-    } else {
-      setNotice({ tone: 'ok', title: 'All 5 Devil’s Advocate inspectors cleared this floor', lines: [out.summary] });
-    }
+    if (out.findings.length) setActiveFindingId(out.findings[0].id);
   };
 
-  /** Surgical Fixer (Elena Vasquez): draft & simulate a verified patch for 1 finding or all findings. */
+  /** Technician findings cannot be re-measured, so they are carried across a fix unless the fix clears them. */
+  const carried = (cleared: string[]) => (activeAudit?.findings ?? []).filter((f) => f.source === 'gemini' && !cleared.includes(f.id));
+
+  /** A layout fix for measured findings or machines a technician wants moved: drafted, validated and simulated on the server. */
   const requestFix = async (targetList: AdvocateFinding[]) => {
     if (!targetList.length) return;
     setMode('fix');
     setWalkthroughIdx(null);
-    setLayers((l) => ({ ...l, crew: true }));
-    const out = await call<FixProposal>('Elena Vasquez drafting surgical fix', '/api/advocate/fix', {
-      spec: draft,
-      findings: targetList,
-      requirements: project.requirements,
-    });
+    const out = await call<FixProposal>('Drafting a layout fix', '/api/advocate/fix', { spec: draft, findings: targetList, requirements: project.requirements });
+    setMode(null);
     if (!out) return;
-    setFixProposal(out);
-    void speakAs('fixer', out.spokenSummary, `${out.ops.length} op fix preview`);
+    const merged = buildReport(out.spec, [...out.postAudit.findings, ...carried(out.resolvedIds ?? [])], 'full');
+    const fixerAt = out.postAudit.walkPlans.find((p) => p.role === 'fixer')?.targetId;
+    merged.walkPlans = computeCharacterWalkPlans(out.spec, merged.findings, fixerAt ? [fixerAt] : undefined);
+    setFixProposal({ ...out, postAudit: merged, remainingBlockers: merged.blockerCount, remainingWarnings: merged.warningCount });
+  };
+
+  /** Add the equipment findings say is missing. Code finds each unit a legal spot beside the machine it serves. */
+  const previewEquipment = (list: AdvocateFinding[]) => {
+    if (!evaluation.ok) return;
+    let next = draft;
+    const ops: EditOp[] = [];
+    const cleared: string[] = [];
+    const names: string[] = [];
+    for (const f of list) {
+      const added = addSupportEquipment(next, f);
+      if (!added) continue;
+      next = added.spec;
+      ops.push(...added.ops);
+      cleared.push(f.id);
+      names.push(added.station.name ?? added.station.type);
+    }
+    if (!ops.length) return void setNotice({ tone: 'error', title: 'No room on the floor for that equipment', lines: ['Free some floor space or widen the floor, then try again.'] });
+    // same number of simulated shifts as the layout it is compared with, so the difference is the equipment and not the sampling
+    const ev = evaluate(next, next.stations.length > 40 ? 10 : 30);
+    if (!ev.ok) return void setNotice({ tone: 'error', title: 'Adding that equipment breaks a layout rule', lines: ev.errors.map((e) => e.message) });
+    const rows = Object.fromEntries(compare(evaluation.metrics, ev.metrics).map((r) => [r.key, r.delta]));
+    const measured = runDeterministicAdvocateAudit(next, ev.metrics, ev.routes, project.requirements).findings;
+    const post = buildReport(next, [...measured, ...carried(cleared)], 'full');
+    const summary = names.length === 1 ? `Add ${names[0]}` : `Add ${names.length} units: ${names.join(', ')}`;
+    setWalkthroughIdx(null);
+    setFixProposal({
+      id: `equip-${Date.now()}`,
+      targetFindingIds: cleared,
+      summary,
+      spokenSummary: `${summary}. Placed beside the machine it serves.`,
+      ops,
+      spec: next,
+      deltas: { uph: rows.uph, leadMin: rows.lead, costPerUnit: rows.cpu, buildCost: rows.build },
+      resolvedCount: cleared.length,
+      resolvedIds: cleared,
+      remainingBlockers: post.blockerCount,
+      remainingWarnings: post.warningCount,
+      postAudit: post,
+      source: 'deterministic',
+      ms: 0,
+    });
+  };
+
+  /** A design or procedure change is the user's to sign off: marking it done takes it off the list. */
+  const markDone = (f: AdvocateFinding) => {
+    if (!serverAudit || fixProposal) return;
+    setServerAudit(buildReport(draft, serverAudit.findings.filter((x) => x.id !== f.id), serverAudit.mode));
   };
 
   const applyFixProposal = () => {
@@ -549,6 +634,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     const v = makeVersion(fixProposal.spec, ev.metrics, current, nextN, `Fixer: ${fixProposal.summary.split(' — ')[0]}`);
     stopAudio();
     setSpeech(null);
+    keepAudit.current = { id: v.id, report: fixProposal.postAudit };
     setDraft(fixProposal.spec);
     setServerAudit(fixProposal.postAudit);
     setFixProposal(null);
@@ -556,7 +642,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     onChange({ versions: [...versions, v], currentId: v.id });
     setNotice({
       tone: 'ok',
-      title: `Saved Elena Vasquez’s fix as ${v.id}`,
+      title: `Saved the fix as ${v.id}`,
       lines: [
         fixProposal.resolvedCount > 0
           ? `Resolved ${fixProposal.resolvedCount} issue${fixProposal.resolvedCount === 1 ? '' : 's'} · ${fixProposal.remainingBlockers} blocker${fixProposal.remainingBlockers === 1 ? '' : 's'} remaining.`
@@ -565,14 +651,13 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     });
   };
 
-  /** The Improve loop with automatic 5-agent Devil's Advocate gate on every round. */
+  /** The improve loop. Each kept change still has to pass the measured checks, but the crew is not deployed. */
   const improve = async () => {
     setMode('improve');
     setImproved(null);
     setSandbox(null);
     setFixProposal(null);
-    setLayers((l) => ({ ...l, crew: true }));
-    const out = await call<ImproveResult>('Starting Improve + Devil’s Advocate gate', '/api/improve', {
+    const out = await call<ImproveResult>('Improving the layout', '/api/improve', {
       spec: draft,
       goal,
       requirements: project.requirements,
@@ -591,7 +676,6 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
       parent = makeVersion(k.spec, ev.metrics, parent, n++, `Agent, round ${k.round}: ${k.name}`);
       added.push(parent);
     }
-    if (out.advocateReport) setServerAudit(out.advocateReport);
     setImproved({ ...out, saved: added.filter((v) => v.label.startsWith('Agent')).map((v) => v.id) });
     if (added.length) onChange({ versions: [...versions, ...added], currentId: parent.id });
   };
@@ -639,6 +723,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const outcomeIcon = { kept: 'check', simulated: 'minus', 'gated out': 'minus', rejected: 'x', vetoed: 'shield' } as const;
 
   const totalOpenFindings = findings.filter((f) => f.severity !== 'advisory').length;
+  const missingUnits = findings.filter((f) => fixKind(f) === 'equipment');
+  const layoutIssues = findings.filter((f) => fixKind(f) === 'layout' && f.severity !== 'advisory');
 
   return (
     <div className={`page workspace${capture ? ' capture' : ''}`}>
@@ -662,7 +748,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           highlightedIds={highlightedIds}
           bottleneck={hot ? sim.bottleneck.name : undefined}
           selectedId={selected}
-          walkPlans={activeAudit?.walkPlans ?? []}
+          walkPlans={crewPlans}
+          bubbles={bubbles}
           activeRole={activeRole}
           speakingRole={speakingRole}
           insetRight={narrow || capture ? 0 : PANEL + 14}
@@ -700,10 +787,10 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
 
       <aside className="panel" style={narrow ? undefined : { width: PANEL }}>
         <nav className="tabs" role="tablist">
-          {(['overview', 'improve', 'equipment', 'versions'] as const).map((t) => (
+          {(['overview', 'improve', 'evals', 'equipment', 'versions'] as const).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
               {t[0].toUpperCase() + t.slice(1)}
-              {t === 'improve' && totalOpenFindings > 0 && <em>{totalOpenFindings}</em>}
+              {t === 'evals' && totalOpenFindings > 0 && <em>{totalOpenFindings}</em>}
               {t === 'versions' && <em>{versions.length}</em>}
             </button>
           ))}
@@ -731,37 +818,43 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   </p>
                 )}
               </div>
-              {activeAudit && (
-                <div className="section">
-                  <div className="adv-head">
-                    <h3>Floor review (5 agents)</h3>
+              <div className="section">
+                <div className="adv-head">
+                  <h3>Evals</h3>
+                  {activeAudit && (
                     <span className={`adv-verdict ${activeAudit.verdict}`}>
                       {activeAudit.blockerCount > 0
                         ? `${activeAudit.blockerCount} blocker${activeAudit.blockerCount > 1 ? 's' : ''}`
                         : activeAudit.warningCount > 0
-                          ? `${activeAudit.warningCount} warning${activeAudit.warningCount > 1 ? '' : 's'}`
-                          : 'Cleared'}
+                          ? `${activeAudit.warningCount} warning${activeAudit.warningCount > 1 ? 's' : ''}`
+                          : 'Nothing found'}
                     </span>
-                  </div>
-                  <p className="say">{activeAudit.summary}</p>
-                  <div className="row">
-                    <button className="ghost sm" onClick={() => setTab('improve')}>
-                      <Icon name="shield" size={14} /> Open review
-                    </button>
-                    {findings.length > 0 && (
-                      <button
-                        className="text sm"
-                        onClick={() => {
-                          setTab('improve');
-                          startWalkthroughAt(0);
-                        }}
-                      >
-                        <Icon name="play" size={14} /> Play walkthrough
-                      </button>
-                    )}
-                  </div>
+                  )}
                 </div>
-              )}
+                {activeAudit ? (
+                  <>
+                    <p className="say">{activeAudit.summary}</p>
+                    <div className="row">
+                      <button className="ghost sm" onClick={() => setTab('evals')}>
+                        <Icon name="shield" size={14} /> Open evals
+                      </button>
+                    </div>
+                  </>
+                ) : evalRunning ? (
+                  <p className="say">
+                    <span className="spinner ink" /> The crew is on the floor.
+                  </p>
+                ) : (
+                  <>
+                    <p className="say">Not run on this layout. Five technicians inspect every machine and say what is wrong with it.</p>
+                    <div className="row">
+                      <button className="primary sm" disabled={busy} onClick={() => void runEvals()}>
+                        <Icon name="shield" size={14} /> Run evals
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
               <div className="section">
                 <h3>How busy each step is</h3>
                 <div className="utils">
@@ -835,7 +928,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           {tab === 'improve' && (
             <>
               <div className="section">
-                <h3>Meet demand, clear the 5-agent gate, optimise</h3>
+                <h3>Meet demand, then optimise</h3>
                 <div className="segmented" role="radiogroup" aria-label="Goal">
                   {GOALS.map((g) => (
                     <button key={g.id} role="radio" aria-checked={goal === g.id} className={goal === g.id ? 'on' : ''} disabled={busy} onClick={() => setGoal(g.id)}>
@@ -847,16 +940,13 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   <button className="primary sm" disabled={busy} onClick={() => void improve()}>
                     Improve layout
                   </button>
-                  <button className="ghost sm" disabled={busy} onClick={() => void runFullAudit()}>
-                    <Icon name="shield" size={14} /> Audit floor
-                  </button>
                   <button className="text sm" disabled={busy} onClick={() => void deepSearch()} title="A managed agent runs eight seeded searches in a remote sandbox">
                     Sandbox
                   </button>
                 </div>
               </div>
 
-              {busy && mode && (
+              {busy && (mode === 'improve' || mode === 'sandbox') && (
                 <div className="section">
                   <div className="live">
                     <span className="spinner ink" />
@@ -871,154 +961,6 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                       </div>
                     </div>
                   ))}
-                </div>
-              )}
-
-              {/* Surgical Fixer Preview (Elena Vasquez) */}
-              {!busy && fixProposal && (
-                <div className="section fix-preview">
-                  <div className="fix-preview-head">
-                    <b>
-                      <span className="adv-dot" style={{ background: ADVOCATE_CHARACTERS.fixer.accent }} />
-                      Elena Vasquez · Proposed fix
-                    </b>
-                    <button className="text sm" onClick={() => void speakAs('fixer', fixProposal.spokenSummary, 'Proposed fix')}>
-                      <Icon name="volume" size={14} /> Hear
-                    </button>
-                  </div>
-                  <p className="say">{fixProposal.summary}</p>
-                  <DeltaLine d={fixProposal.deltas} />
-                  <p className="muted small num">
-                    Resolves {fixProposal.resolvedCount} finding{fixProposal.resolvedCount === 1 ? '' : 's'} · {fixProposal.remainingBlockers} blocker{fixProposal.remainingBlockers === 1 ? '' : 's'} and {fixProposal.remainingWarnings} warning{fixProposal.remainingWarnings === 1 ? '' : 's'} remaining
-                  </p>
-                  <ul className="fix-ops">
-                    {fixProposal.ops.slice(0, 5).map((op, i) => (
-                      <li key={i}>{describeOp(op)}</li>
-                    ))}
-                  </ul>
-                  <div className="row">
-                    <button className="primary sm" onClick={applyFixProposal}>
-                      <Icon name="check" size={14} /> Apply & save as v{nextN}
-                    </button>
-                    <button
-                      className="ghost sm"
-                      onClick={() => {
-                        setFixProposal(null);
-                        stopAudio();
-                        setSpeech(null);
-                      }}
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* 5-Agent Devil's Advocate Review Ledger */}
-              {activeAudit && (
-                <div className="section">
-                  <div className="adv-head">
-                    <h3>Devil’s Advocate Review</h3>
-                    <span className={`adv-verdict ${activeAudit.verdict}`}>
-                      {activeAudit.blockerCount} blocker{activeAudit.blockerCount === 1 ? '' : 's'} · {activeAudit.warningCount} warning{activeAudit.warningCount === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <p className="muted small">
-                    Click any inspector on the 3D floor or below to hear their critique aloud.
-                    {activeAudit.mode === 'full' ? ' Calibrated with Gemini Decisions.' : ''}
-                  </p>
-
-                  <div className="row">
-                    {walkthroughIdx !== null ? (
-                      <button className="ghost sm" onClick={stopWalkthrough}>
-                        <Icon name="stop" size={13} /> Stop walkthrough
-                      </button>
-                    ) : (
-                      <button className="ghost sm" disabled={!findings.length} onClick={() => startWalkthroughAt(0)}>
-                        <Icon name="play" size={13} /> Play walkthrough
-                      </button>
-                    )}
-                    <button
-                      className="primary sm"
-                      disabled={busy || !findings.length}
-                      onClick={() => void requestFix(findings.filter((f) => f.severity !== 'advisory').length ? findings.filter((f) => f.severity !== 'advisory') : findings)}
-                    >
-                      <Icon name="wrench" size={13} /> Preview fix all
-                    </button>
-                  </div>
-
-                  {/* 5 Inspector Filter Strip */}
-                  <div className="adv-crew" role="group" aria-label="Filter by inspector">
-                    <button className={`adv-crew-btn${roleFilter === 'all' ? ' on' : ''}`} onClick={() => setRoleFilter('all')}>
-                      All <em>{findings.length}</em>
-                    </button>
-                    {ADVOCATE_ROLES.map((role) => {
-                      const char = ADVOCATE_CHARACTERS[role];
-                      const count = findings.filter((f) => f.role === role).length;
-                      return (
-                        <button
-                          key={role}
-                          className={`adv-crew-btn${roleFilter === role ? ' on' : ''}`}
-                          onClick={() => {
-                            setRoleFilter(roleFilter === role ? 'all' : role);
-                            const first = findings.find((f) => f.role === role);
-                            if (first) setActiveFindingId(first.id);
-                          }}
-                          title={`${char.name} — ${char.title}`}
-                        >
-                          <span className="adv-dot" style={{ background: char.accent }} />
-                          {char.name.split(' ')[0]} <em>{count}</em>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Findings Ledger */}
-                  <div className="adv-list">
-                    {filteredFindings.length === 0 ? (
-                      <p className="muted small">No findings flagged by {roleFilter === 'all' ? 'the panel' : ADVOCATE_CHARACTERS[roleFilter].name}.</p>
-                    ) : (
-                      filteredFindings.map((f) => {
-                        const char = ADVOCATE_CHARACTERS[f.role];
-                        const isSelected = activeFindingId === f.id;
-                        return (
-                          <div
-                            key={f.id}
-                            className={`adv-row${isSelected ? ' active' : ''}`}
-                            onClick={() => {
-                              setActiveFindingId(f.id);
-                              if (f.targetIds[0]) setSelected(f.targetIds[0]);
-                            }}
-                          >
-                            <div className="adv-meta">
-                              <span className="adv-dot" style={{ background: char.accent }} />
-                              <span className={`adv-sev ${f.severity}`}>{f.severity}</span>
-                              <span>· {char.name}</span>
-                              {f.targetIds.length > 0 && <span>· {f.targetIds.join(', ')}</span>}
-                              {f.decisionConfidence !== undefined && <span className="num">· {Math.round(f.decisionConfidence * 100)}% risk</span>}
-                            </div>
-                            <div className="adv-title">{f.title}</div>
-                            <div className="adv-evidence">{f.evidence}</div>
-                            <div className="adv-actions" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                className="ghost sm"
-                                onClick={() => {
-                                  setWalkthroughIdx(null);
-                                  hearFinding(f);
-                                }}
-                              >
-                                <Icon name="volume" size={13} /> Hear
-                              </button>
-                              <button className="ghost sm" disabled={busy} onClick={() => void requestFix([f])}>
-                                <Icon name="wrench" size={13} /> Preview fix
-                              </button>
-                              <span className="adv-hint">{f.metricDeltaHint}</span>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
                 </div>
               )}
 
@@ -1060,7 +1002,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                               {t.gate !== undefined ? ` · pre-check ${Math.round(t.gate * 100)}%` : ''}
                               {t.outcome === 'gated out' ? ' · not simulated' : ''}
                               {t.outcome === 'rejected' ? ` · broke a rule: ${(t.errors ?? [])[0] ?? ''}` : ''}
-                              {t.outcome === 'vetoed' ? ` · Devil’s Advocate veto: ${(t.vetoReasons ?? []).join('; ')}` : ''}
+                              {t.outcome === 'vetoed' ? ` · failed the measured checks: ${(t.vetoReasons ?? []).join('; ')}` : ''}
                             </span>
                             {t.deltas && <DeltaLine d={t.deltas} />}
                           </div>
@@ -1091,6 +1033,220 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === 'evals' && (
+            <>
+              {!activeAudit && !evalRunning && (
+                <div className="section evals-empty">
+                  <h3>Evals</h3>
+                  <p className="say">Five senior technicians walk this floor and inspect every machine for their own trade: process, safety, electrical, plumbing and air, machines. A separate checker drops anything that is not specific to this design.</p>
+                  <div className="row">
+                    <button className="primary" disabled={busy} onClick={() => void runEvals()}>
+                      <Icon name="shield" size={15} /> Run evals
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {evalRunning && (
+                <div className="section">
+                  <h3>The crew is on the floor</h3>
+                  <div className="crew-list">
+                    {ADVOCATE_ROLES.map((role) => {
+                      const c = ADVOCATE_CHARACTERS[role];
+                      const st = crewLive[role];
+                      return (
+                        <div key={role} className={`crew-row ${st?.state ?? 'writing'}`}>
+                          <span className="adv-dot" style={{ background: c.accent }} />
+                          <div>
+                            <b>{c.name}</b>
+                            <span>{c.title}</span>
+                          </div>
+                          <span className="crew-state">
+                            {!st || st.state === 'writing' ? (
+                              <>
+                                <span className="spinner ink" /> {st?.text || 'walking over'}
+                              </>
+                            ) : (
+                              st.text
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="muted small">{run.live ?? 'Working'}</p>
+                </div>
+              )}
+
+              {busy && mode === 'fix' && (
+                <div className="section">
+                  <div className="live">
+                    <span className="spinner ink" />
+                    {run.live ?? 'Working'}
+                  </div>
+                </div>
+              )}
+
+              {/* A fix, previewed on the floor before it is saved */}
+              {!busy && fixProposal && (
+                <div className="section fix-preview">
+                  <div className="fix-preview-head">
+                    <b>
+                      <span className="adv-dot" style={{ background: ADVOCATE_CHARACTERS.fixer.accent }} />
+                      Proposed fix
+                    </b>
+                    <button className="text sm" onClick={() => void speakAs('fixer', fixProposal.spokenSummary, 'Proposed fix')}>
+                      <Icon name="volume" size={14} /> Hear
+                    </button>
+                  </div>
+                  <p className="say">{fixProposal.summary}</p>
+                  <DeltaLine d={fixProposal.deltas} />
+                  <p className="muted small num">
+                    Resolves {fixProposal.resolvedCount} finding{fixProposal.resolvedCount === 1 ? '' : 's'} · {fixProposal.remainingBlockers} blocker{fixProposal.remainingBlockers === 1 ? '' : 's'} and {fixProposal.remainingWarnings} warning{fixProposal.remainingWarnings === 1 ? '' : 's'} remaining
+                  </p>
+                  <ul className="fix-ops">
+                    {fixProposal.ops.slice(0, 5).map((op, i) => (
+                      <li key={i}>{describeOp(op)}</li>
+                    ))}
+                  </ul>
+                  <div className="row">
+                    <button className="primary sm" onClick={applyFixProposal}>
+                      <Icon name="check" size={14} /> Apply & save as v{nextN}
+                    </button>
+                    <button
+                      className="ghost sm"
+                      onClick={() => {
+                        setFixProposal(null);
+                        stopAudio();
+                        setSpeech(null);
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+
+
+              {activeAudit && !evalRunning && (
+                <div className="section">
+                  <div className="adv-head">
+                    <h3>Evals</h3>
+                    <span className={`adv-verdict ${activeAudit.verdict}`}>
+                      {activeAudit.blockerCount} blocker{activeAudit.blockerCount === 1 ? '' : 's'} · {activeAudit.warningCount} warning{activeAudit.warningCount === 1 ? '' : 's'} · {activeAudit.advisoryCount} note{activeAudit.advisoryCount === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <p className="muted small">
+                    {findings.filter((f) => f.source === 'gemini').length} written by the technicians and passed by the checker, {findings.filter((f) => f.source === 'deterministic').length} measured by the simulator.
+                  </p>
+
+                  <div className="row">
+                    {missingUnits.length > 0 && (
+                      <button className="primary sm" disabled={busy || !!fixProposal} onClick={() => previewEquipment(missingUnits)}>
+                        <Icon name="plus" size={13} /> Add {missingUnits.length} missing unit{missingUnits.length === 1 ? '' : 's'}
+                      </button>
+                    )}
+                    {layoutIssues.length > 0 && (
+                      <button className="ghost sm" disabled={busy || !!fixProposal} onClick={() => void requestFix(layoutIssues)}>
+                        <Icon name="wrench" size={13} /> Fix layout ({layoutIssues.length})
+                      </button>
+                    )}
+                    <button className="text sm" disabled={busy} onClick={() => void runEvals()}>
+                      Run again
+                    </button>
+                  </div>
+
+                  <div className="adv-crew" role="group" aria-label="Filter by technician">
+                    <button className={`adv-crew-btn${roleFilter === 'all' ? ' on' : ''}`} onClick={() => setRoleFilter('all')}>
+                      All <em>{findings.length}</em>
+                    </button>
+                    {ADVOCATE_ROLES.map((role) => {
+                      const char = ADVOCATE_CHARACTERS[role];
+                      const count = findings.filter((f) => f.role === role).length;
+                      return (
+                        <button
+                          key={role}
+                          className={`adv-crew-btn${roleFilter === role ? ' on' : ''}`}
+                          onClick={() => {
+                            setRoleFilter(roleFilter === role ? 'all' : role);
+                            const first = findings.find((f) => f.role === role);
+                            if (first) setActiveFindingId(first.id);
+                          }}
+                          title={`${char.name}, ${char.title.toLowerCase()}`}
+                        >
+                          <span className="adv-dot" style={{ background: char.accent }} />
+                          {char.shortTitle} <em>{count}</em>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="adv-list">
+                    {filteredFindings.length === 0 ? (
+                      <p className="muted small">{roleFilter === 'all' ? 'Nothing found.' : `${ADVOCATE_CHARACTERS[roleFilter].name} found nothing.`}</p>
+                    ) : (
+                      filteredFindings.map((f) => {
+                        const char = ADVOCATE_CHARACTERS[f.role];
+                        const kind = fixKind(f);
+                        return (
+                          <div
+                            key={f.id}
+                            className={`adv-row${activeFindingId === f.id ? ' active' : ''}`}
+                            onClick={() => {
+                              setActiveFindingId(f.id);
+                              if (f.targetIds[0]) setSelected(f.targetIds[0]);
+                            }}
+                          >
+                            <div className="adv-meta">
+                              <span className="adv-dot" style={{ background: char.accent }} />
+                              <span className={`adv-sev ${f.severity}`}>{f.severity === 'advisory' ? 'note' : f.severity}</span>
+                              <span>· {char.shortTitle}</span>
+                              <span>· {f.targetIds.length ? f.targetIds.join(', ') : 'whole plant'}</span>
+                              <span className="adv-src">{f.source === 'deterministic' ? 'measured' : f.decisionConfidence !== undefined ? `checker ${Math.round(f.decisionConfidence * 100)}%` : 'unchecked'}</span>
+                            </div>
+                            <div className="adv-title">{f.title}</div>
+                            <div className="adv-evidence">{f.evidence}</div>
+                            <div className="adv-do">
+                              <b>Fix</b> {f.action ?? f.suggestedFixHint}
+                            </div>
+                            <div className="adv-actions" onClick={(e) => e.stopPropagation()}>
+                              {kind === 'equipment' && f.fix?.kind === 'equipment' && (
+                                <button className="ghost sm" disabled={busy || !!fixProposal} onClick={() => previewEquipment([f])}>
+                                  <Icon name="plus" size={13} /> Add it{f.fix.equipment.price ? ` · ${money(f.fix.equipment.price)}` : ''}
+                                </button>
+                              )}
+                              {kind === 'layout' && (
+                                <button className="ghost sm" disabled={busy || !!fixProposal} onClick={() => void requestFix([f])}>
+                                  <Icon name="wrench" size={13} /> Preview fix
+                                </button>
+                              )}
+                              {kind === 'spec' && (
+                                <button className="ghost sm" disabled={busy || !!fixProposal} onClick={() => markDone(f)} title="A design or procedure change: tick it off once it is in the spec">
+                                  <Icon name="check" size={13} /> Mark done
+                                </button>
+                              )}
+                              <button
+                                className="icon-btn"
+                                title="Read aloud"
+                                aria-label="Read this finding aloud"
+                                onClick={() => {
+                                  setWalkthroughIdx(null);
+                                  hearFinding(f);
+                                }}
+                              >
+                                <Icon name="volume" size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
               )}
             </>

@@ -1,24 +1,17 @@
-// Server-side orchestration for the 5 Devil's Advocate agents, Surgical Fixer (Elena Vasquez),
-// and Gemini 3.8 TTS voice synthesis for 3D floor characters.
+// The eval crew: five technician agents that inspect a design, the checker that filters what they
+// write, the layout fixer, and speech for the floor characters.
 
-import type {
-  AdvocateFinding,
-  AdvocateReport,
-  AdvocateRole,
-  AdvocateVerdict,
-  CharacterRole,
-  Emit,
-  FixProposal,
-  MetricDeltas,
-  Requirements,
-} from '../src/contracts';
+import type { AdvocateFinding, AdvocateReport, AdvocateRole, CharacterRole, Emit, FindingFix, FixProposal, MetricDeltas, Requirements } from '../src/contracts';
 import {
   ADVOCATE_CHARACTERS,
   ADVOCATE_ROLES,
   buildDeterministicFixCandidates,
+  buildReport,
   computeCharacterWalkPlans,
+  crewStartTargets,
   runDeterministicAdvocateAudit,
 } from '../src/engines/advocate';
+import type { Routes } from '../src/engines/route';
 import { validate } from '../src/engines/validate';
 import { compare, evaluate, type Metrics } from '../src/engines/versions';
 import { applyOps, leanSpec as lean, type EditOp, type FactorySpec } from '../src/spec';
@@ -31,225 +24,328 @@ function deltasBetween(a: Metrics, b: Metrics): MetricDeltas {
   return { uph: rows.uph, leadMin: rows.lead, costPerUnit: rows.cpu, buildCost: rows.build };
 }
 
-const refinementSchema = {
+export interface AuditOptions {
+  /** inside the improve loop: only what the engines measure, no model calls */
+  fastGate?: boolean;
+}
+
+const MAX_PER_TECHNICIAN = 4;
+/** below this the checker thinks a finding is generic advice, and it is dropped */
+const KEEP_AT = 0.5;
+
+/** What each technician looks at. The prompt is the trade, not a personality. */
+const TRADES: Record<AdvocateRole, { doing: string; scope: string; examples: string }> = {
+  process: {
+    doing: 'checking rates, handling and machine fit',
+    scope:
+      'whether each machine suits the job it is given and the machines around it: rate match between consecutive steps, part size and weight against the machine envelope and capacity, how parts are held and moved between machines, buffers where a fast step feeds a slow one, batch machines on a one-piece flow, changeover, where quality is checked relative to where defects are made.',
+    examples:
+      '"deburr1: a 0.5 cubic foot vibratory bowl holds about 15 housings a load on a 30 minute cycle, 30 an hour, against 60 an hour needed. Replace both with 2 cubic foot bowls." / "saw1: bar stock is 3 m long but the belt feeding saw1 is 0.4 m wide. Feed the saw from a roller rack, not the belt."',
+  },
+  safety: {
+    doing: 'checking guarding, exposure, fire and escape',
+    scope:
+      'guarding and interlocks on each machine, emergency stops within reach, pinch and crush points at conveyors and transfers, operator exposure to coolant mist, dust, fume and noise, fire load (metal fines, solvents, oil), eye-wash and first aid where chemicals are handled, lockout points, pedestrian routes against conveyors and vehicles, travel distance to an exit.',
+    examples:
+      '"mill4: aluminium fines from eleven mills collect dry in the chip trays. Aluminium dust is explosive. Fit a wet collector, not a dry one." / "wash1: operators handle alkaline cleaner at 60 C with no eye-wash within 10 m. Add a plumbed eye-wash station beside it."',
+  },
+  electrical: {
+    doing: 'checking supply, protection and backup power',
+    scope:
+      'supply voltage and phase each machine needs, total connected load against the service, feeder and breaker sizing, cable run length and voltage drop, starting current of large motors, backup power for controls that lose position or data on a power cut (CNC controls, CMMs, PLCs), earthing and bonding, emergency power off, power quality for measuring equipment.',
+    examples:
+      '"lathe3: a 15 kW spindle on 400 V three-phase draws about 27 A running and several times that starting, at the end of a 38 m run. Size the feeder for 40 A and check volt drop under 3%." / "plant: 210 kW connected with no backup supply; a power cut mid-cycle scraps the part in every spindle and loses CMM position. Add a UPS for the CNC and CMM controls."',
+  },
+  utilities: {
+    doing: 'checking water, drains, coolant, air and extraction',
+    scope:
+      'water supply and drainage to each machine that needs it, coolant mixing, sump capacity and coolant disposal, oil and coolant leaks and how they are contained (bunds, drip trays, oil-water separator before drain), compressed air demand of each machine and whether a compressor and dryer exist for it, dust, mist and fume extraction sized in cubic metres an hour against the machine, temperature control where measurement needs it.',
+    examples:
+      '"mill1: eleven enclosed mills each need about 150 l/min of dry air at 6 bar for tool change and no compressor is on the floor. Add a 30 kW screw compressor with dryer." / "lathe2: way oil and coolant leak past the chip conveyor seal on this type of lathe and there is no containment under it. Add a bunded drip tray drained to an oil-water separator."',
+  },
+  machines: {
+    doing: 'checking installation, access and upkeep',
+    scope:
+      'floor loading and foundations under heavy machines, service clearance for doors, electrical cabinets, chip conveyors, bar feeders and tool magazines, vibration reaching measuring machines, chip and swarf removal, lubrication and coolant top-up access, wear parts and spares, whether one machine going down stops the line, how a machine is craned or skated in and out.',
+    examples:
+      '"cmm1: a bridge CMM 4 m from five CNC lathes will read their vibration through the slab. Move it at least 10 m away or put it on an isolated plinth." / "mill6: the rear electrical cabinet opens toward mill11 with 1.2 m between them; the door needs 0.9 m and a technician cannot stand behind it. Open the gap to 1.8 m."',
+  },
+};
+
+const technicianSystem = (role: AdvocateRole) => `You are a senior ${ADVOCATE_CHARACTERS[role].title.toLowerCase()} with twenty years on factory floors, doing a pre-build design review. You are ${TRADES[role].doing}.
+
+Your scope: ${TRADES[role].scope}
+
+How you write:
+- Go machine by machine through the sheet. Report only what is wrong with THIS design. Say nothing about a machine you have no finding for.
+- Every finding names one machine by its id from the sheet, or "plant" when something the whole plant needs is missing.
+- "problem" is one sentence that states the defect and the fact that makes it one: a number from the sheet, or a known property of that make or kind of machine (use what you know about the machine named in the sheet). Give the number.
+- "action" is one imperative sentence a contractor could act on, with a size, rating, distance or part where it applies.
+- No general advice, no praise, no restating the brief, no "consider", "ensure", "it is recommended", "may" or "could". If you would write the same sentence about any factory, do not write it.
+- Do not repeat anything listed under "Already measured". Do not invent machine ids.
+- Stay in your trade. Four other technicians are reviewing the same sheet: ${ADVOCATE_ROLES.filter((r) => r !== role)
+  .map((r) => ADVOCATE_CHARACTERS[r].title.toLowerCase())
+  .join(', ')}. Leave compressed air, water, drains, coolant and extraction to plumbing and air; supply and protection to electrical; guarding, exposure and fire to safety; installation, clearance and upkeep to machines; rates and machine fit to process. If it is another trade's call, do not write it.
+- If the fix is a floor-standing unit that is missing from the sheet (a dust collector, compressor, generator, UPS cabinet, chiller, eye-wash station, separator), set fixBy to "add_equipment" and describe that unit with a realistic footprint, power and installed price. Only for a unit that is absent: replacing or upgrading a machine that is already on the sheet is a "design_change". If the fix is moving or re-spacing a machine, set fixBy to "move_machine". Otherwise "design_change".
+- severity: most findings are "warning": it will cost downtime, scrap, rework or a failed inspection. Use "blocker" only when production cannot start as drawn or someone will be hurt, and for at most two findings. Use "advisory" for an improvement that can wait.
+- At most ${MAX_PER_TECHNICIAN} findings, worst first. Fewer is fine. None is fine.
+
+The kind of finding wanted (these are from another plant; do not copy them): ${TRADES[role].examples}`;
+
+const technicianSchema = {
   type: 'object',
   properties: {
-    summary: { type: 'string' },
-    spokenRewrites: {
+    findings: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
-          findingId: { type: 'string' },
-          spokenLine: { type: 'string' },
-          suggestedFixHint: { type: 'string' },
+          targetId: { type: 'string', description: 'a machine id exactly as in the sheet, or "plant"' },
+          title: { type: 'string', description: 'at most 9 words: the machine or item and what is wrong' },
+          problem: { type: 'string', description: 'one sentence: the defect and the number or fact behind it' },
+          severity: { type: 'string', enum: ['blocker', 'warning', 'advisory'] },
+          action: { type: 'string', description: 'one imperative sentence with a size, rating or distance' },
+          fixBy: { type: 'string', enum: ['add_equipment', 'move_machine', 'design_change'] },
+          equipmentName: { type: 'string', description: 'the unit to add, e.g. "Wet dust collector"; empty unless fixBy is add_equipment' },
+          equipmentW: { type: 'number', description: 'footprint width in metres; 0 if none' },
+          equipmentD: { type: 'number', description: 'footprint depth in metres; 0 if none' },
+          equipmentH: { type: 'number', description: 'height in metres; 0 if none' },
+          equipmentKw: { type: 'number', description: 'power draw in kW; 0 if none' },
+          equipmentNeedsWater: { type: 'boolean' },
+          equipmentPrice: { type: 'number', description: 'installed price in US dollars; 0 if none' },
         },
-        required: ['findingId', 'spokenLine', 'suggestedFixHint'],
+        required: ['targetId', 'title', 'problem', 'severity', 'action', 'fixBy', 'equipmentName', 'equipmentW', 'equipmentD', 'equipmentH', 'equipmentKw', 'equipmentNeedsWater', 'equipmentPrice'],
       },
     },
   },
-  required: ['summary', 'spokenRewrites'],
+  required: ['findings'],
 };
 
-export interface AuditOptions {
-  /** Fast mode inside the Improve loop: deterministic probes + batched Decisions gate (skips extra prose call) */
-  fastGate?: boolean;
+/** Everything a technician is given: the plant, its utilities, and one line per machine with the facts that matter. */
+export function plantSheet(spec: FactorySpec, metrics: Metrics, routes: Routes, requirements?: Requirements): string {
+  const util = metrics.sim.utilisation;
+  const labels = new Map((requirements?.steps ?? []).map((s) => [s.type, s.label]));
+  const inFlow = new Set(spec.routing);
+  const gap = (a: FactorySpec['stations'][number], b: FactorySpec['stations'][number]) => {
+    const dx = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w));
+    const dy = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.d, b.y + b.d));
+    return Math.hypot(dx, dy);
+  };
+  const run = (list: Routes['power'], id: string) => list.find((r) => r.id === id)?.length;
+  const line = (s: FactorySpec['stations'][number]) => {
+    const others = spec.stations.filter((o) => o.id !== s.id).map((o) => ({ id: o.id, g: gap(s, o) }));
+    const near = others.sort((a, b) => a.g - b.g)[0];
+    const wall = Math.min(s.x, s.y, spec.floor.width - s.x - s.w, spec.floor.depth - s.y - s.d);
+    const p = run(routes.power, s.id);
+    const w = run(routes.water, s.id);
+    return [
+      s.id,
+      labels.get(s.type) ?? s.type,
+      s.name ?? s.type,
+      `${s.w} x ${s.d}${s.height ? ` x ${s.height}` : ''} m`,
+      s.powerKw ? `${s.powerKw} kW${p !== undefined ? `, ${p.toFixed(0)} m from the supply` : ''}` : 'no power',
+      s.needsWater ? `water${w !== undefined ? `, ${w.toFixed(0)} m from the main` : ''}` : 'no water',
+      inFlow.has(s.type) ? `${s.cycleTimeSec} s a part, ${Math.round((util[s.type] ?? 0) * 100)}% busy, ${s.operators} operator${s.operators === 1 ? '' : 's'}` : 'support equipment',
+      near ? `${near.g.toFixed(1)} m to ${near.id}` : '',
+      `${wall.toFixed(1)} m to the nearest wall`,
+      s.zone ?? '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
+  };
+  const load = spec.stations.reduce((t, s) => t + s.powerKw, 0);
+  const support = spec.stations.filter((s) => !inFlow.has(s.type));
+  return [
+    `PLANT: ${requirements?.name ?? spec.name ?? 'Factory'}. ${requirements?.summary ?? ''}`,
+    `Floor ${spec.floor.width} x ${spec.floor.depth} m. Demand ${spec.demandPerHour} an hour; the simulator measures ${metrics.sim.unitsPerHour.median.toFixed(1)} an hour, bottleneck ${metrics.sim.bottleneck.name}. Lead time ${(metrics.sim.leadTimeSec.median / 60).toFixed(0)} min.`,
+    `Parts move by ${spec.transport === 'conveyor' ? `belt conveyor, ${routes.totals.pathM.toFixed(0)} m of it` : `${spec.forklifts ?? 1} forklift(s)`}. Docks: ${spec.docks.map((d) => `${d.kind} on the ${d.wall} wall`).join(', ')}.`,
+    `UTILITIES: electrical supply enters at (${spec.utilityEntry.power.x}, ${spec.utilityEntry.power.y}) m, water main at (${spec.utilityEntry.water.x}, ${spec.utilityEntry.water.y}) m. Connected load ${load.toFixed(0)} kW across ${spec.stations.filter((s) => s.powerKw > 0).length} machines. ${spec.stations.filter((s) => s.needsWater).length} machines take water.`,
+    `SUPPORT EQUIPMENT ON THE FLOOR: ${support.length ? support.map((s) => s.name ?? s.type).join(', ') : 'none. No compressor, dust or mist collector, generator, UPS, chiller, separator or eye-wash is on the sheet.'}`,
+    `MACHINES (id | step | make and model | footprint | power | water | duty | nearest machine | wall | department):`,
+    ...spec.stations.map(line),
+  ].join('\n');
+}
+
+interface RawFinding {
+  targetId?: string;
+  title?: string;
+  problem?: string;
+  severity?: string;
+  action?: string;
+  fixBy?: string;
+  equipmentName?: string;
+  equipmentW?: number;
+  equipmentD?: number;
+  equipmentH?: number;
+  equipmentKw?: number;
+  equipmentNeedsWater?: boolean;
+  equipmentPrice?: number;
+}
+
+/** A technician's raw finding, checked in code: real machine, real text, sane equipment. */
+function toFinding(role: AdvocateRole, raw: RawFinding, i: number, spec: FactorySpec): AdvocateFinding | null {
+  const title = String(raw.title ?? '').trim();
+  const problem = String(raw.problem ?? '').trim();
+  const action = String(raw.action ?? '').trim();
+  if (title.length < 6 || problem.length < 20 || action.length < 10) return null;
+  const want = String(raw.targetId ?? '').trim();
+  const station = spec.stations.find((s) => s.id === want);
+  if (!station && want.toLowerCase() !== 'plant') return null;
+  const severity = raw.severity === 'blocker' || raw.severity === 'warning' ? raw.severity : 'advisory';
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+  const name = String(raw.equipmentName ?? '').trim();
+  const fix: FindingFix =
+    raw.fixBy === 'add_equipment' && name.length > 2 && n(raw.equipmentW) && n(raw.equipmentD)
+      ? { kind: 'equipment', equipment: { name: name.slice(0, 60).replace(/\s+\S*$/, (m) => (name.length > 60 ? '' : m)), w: n(raw.equipmentW), d: n(raw.equipmentD), h: n(raw.equipmentH) || 1.5, powerKw: n(raw.equipmentKw), needsWater: !!raw.equipmentNeedsWater, price: n(raw.equipmentPrice) } }
+      : raw.fixBy === 'move_machine' && station
+        ? { kind: 'layout' }
+        : { kind: 'spec' };
+  return {
+    id: `${role}-t${i + 1}-${station?.id ?? 'plant'}`,
+    role,
+    severity,
+    title: title.slice(0, 90),
+    evidence: problem,
+    metricDeltaHint: fix.kind === 'equipment' && fix.equipment.price ? `$${Math.round(fix.equipment.price).toLocaleString()} installed` : '',
+    targetIds: station ? [station.id] : [],
+    suggestedFixHint: action,
+    action,
+    fix,
+    spokenLine: `${title}. ${problem} ${action}`,
+    source: 'gemini',
+  };
+}
+
+/** Whose call each kind of missing equipment is, when two technicians ask for the same thing. */
+const OWNER: [RegExp, AdvocateRole][] = [
+  [/compress|air dryer|receiver/i, 'utilities'],
+  [/collector|extract|scrubber|separator|chiller|coolant|drain|sump/i, 'utilities'],
+  [/generator|ups|transformer|panel|switch/i, 'electrical'],
+  [/eye.?wash|shower|guard|fenc|light curtain|extinguish/i, 'safety'],
+];
+
+/**
+ * Two technicians asking for the same unit, or for the same machine to be moved, is one finding.
+ * The trade that owns it keeps it; otherwise the more severe one does.
+ */
+function dedupe(list: AdvocateFinding[]): AdvocateFinding[] {
+  const rank = { blocker: 0, warning: 1, advisory: 2 } as const;
+  const kept = new Map<string, AdvocateFinding>();
+  const out: AdvocateFinding[] = [];
+  for (const f of list) {
+    let key: string | null = null;
+    let owner: AdvocateRole | undefined;
+    if (f.fix?.kind === 'equipment') {
+      const hit = OWNER.find(([re]) => re.test(f.fix?.kind === 'equipment' ? f.fix.equipment.name : ''));
+      // the same kind of unit for the same machine (or for the plant) is the same request
+      key = hit ? `eq:${hit[0].source}:${f.targetIds[0] ?? 'plant'}` : null;
+      owner = hit?.[1];
+    } else if (f.fix?.kind === 'layout') {
+      key = `move:${f.targetIds[0]}`;
+      owner = 'machines';
+    }
+    if (!key) {
+      out.push(f);
+      continue;
+    }
+    const prev = kept.get(key);
+    if (!prev) {
+      kept.set(key, f);
+      continue;
+    }
+    const better = f.role === owner && prev.role !== owner ? true : prev.role === owner && f.role !== owner ? false : rank[f.severity] < rank[prev.severity];
+    if (better) kept.set(key, f);
+  }
+  return [...out, ...kept.values()];
 }
 
 /**
- * Run the 5-Agent Devil's Advocate Review:
- * 1. Deterministic floor, +20% surge, wall-pinch, corridor-choke, unit-econ & maintenance probes
- * 2. One batched Gemini Decisions API (`gemini-decision-1`) call scoring all 5 specialist dimensions
- * 3. Optional `gemini-4-neon` refinement of spoken floor critiques (for full on-demand audits)
+ * The eval crew. Five technician agents each inspect the plant sheet for their own trade and write
+ * findings; the engines add what they measure; an independent checker (Decisions API) drops any
+ * technician finding it judges to be generic advice rather than a defect of this design.
+ * Each step is emitted with the crew member it belongs to, so the floor can show them at work.
  */
-export async function runAdvocateAudit(
-  spec: FactorySpec,
-  emit: Emit,
-  requirements?: Requirements,
-  opts: AuditOptions = {},
-): Promise<AdvocateReport> {
+export async function runAdvocateAudit(spec: FactorySpec, emit: Emit, requirements?: Requirements, opts: AuditOptions = {}): Promise<AdvocateReport> {
   const t0 = Date.now();
   const ev = evaluate(spec, opts.fastGate ? 15 : 25);
-  if (!ev.ok) {
-    throw new Error('Cannot audit an invalid layout: ' + ev.errors.map((e) => e.message).join('; '));
+  if (!ev.ok) throw new Error('Cannot evaluate an invalid layout: ' + ev.errors.map((e) => e.message).join('; '));
+  const measured = runDeterministicAdvocateAudit(spec, ev.metrics, ev.routes, requirements);
+
+  // inside the improve loop only the measured findings gate a candidate: fast, and nothing to argue with
+  if (opts.fastGate) {
+    emit({ stage: 'advocate', actor: 'engine', title: `Measured checks: ${measured.blockerCount} blocker${measured.blockerCount === 1 ? '' : 's'}, ${measured.warningCount} warning${measured.warningCount === 1 ? '' : 's'}`, ms: Date.now() - t0, status: measured.blockerCount ? 'fail' : 'ok' });
+    return { ...measured, ms: Date.now() - t0 };
   }
 
-  emit({
-    stage: 'advocate',
-    actor: 'advocate',
-    title: opts.fastGate ? 'Devil’s Advocate panel gating candidate' : '5 Devil’s Advocate inspectors walking the floor',
-    ms: 0,
-    status: 'running',
-  });
+  emit({ stage: 'advocate', actor: 'advocate', title: 'Five technicians inspecting the floor', ms: 0, status: 'running' });
+  const sheet = plantSheet(spec, ev.metrics, ev.routes, requirements);
+  const already = measured.findings.map((f) => `- ${f.targetIds.join(', ') || 'plant'}: ${f.title}`).join('\n') || '- nothing';
 
-  const det = runDeterministicAdvocateAudit(spec, ev.metrics, ev.routes, requirements);
-  const findings: AdvocateFinding[] = structuredClone(det.findings);
-  const agentVerdicts = structuredClone(det.agentVerdicts);
-
-  // Calibrated 5-agent risk scoring via Gemini Decisions API (one batched call)
-  const decisionContext = [
-    `FactorySpec:\n${JSON.stringify(lean(spec))}`,
-    `Simulated metrics:\n${situation(spec, ev.metrics)}`,
-    requirements ? `Client brief requirements:\n${JSON.stringify({ name: requirements.name, floor: requirements.floor, demandPerHour: requirements.demandPerHour, steps: requirements.steps.map((s) => `${s.type}x${s.count}`) })}` : '',
-    `Deterministic inspection probes:\n${findings.map((f) => `[${f.role.toUpperCase()} ${f.severity}] ${f.title}: ${f.evidence}`).join('\n') || 'None'}`,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-
-  const questions: Record<string, Question> = {
-    stress: {
-      type: 'score',
-      instructions: 'As Marcus Cole (Stress & Bottleneck Breaker), rate the operational collapse risk of this factory layout under normal and +20% surge demand.',
-      criteria: ['rock solid', 'minor strain', 'moderate bottleneck risk', 'high surge collapse risk', 'critical blocker — fails demand'],
-    },
-    safety: {
-      type: 'score',
-      instructions: 'As Nadia Okafor (Safety & Floor Flow Auditor), rate the EHS / floor-flow hazard risk (wall pinches, crossing forklift lanes, exposed long utility runs).',
-      criteria: ['clean egress', 'minor congestion', 'moderate flow hazard', 'unsafe pinch or choke', 'critical safety veto'],
-    },
-    cfo: {
-      type: 'score',
-      instructions: 'As Victor Chen (CFO & Unit-Economics Critic), rate the capital waste and unit-economics inefficiency (idle machines, excess forklifts, high utility build overhead).',
-      criteria: ['lean CapEx', 'acceptable spend', 'moderate waste', 'material CapEx/opex bloat', 'unacceptable unit economics'],
-    },
-    compliance: {
-      type: 'score',
-      instructions: 'As Priya Nair (Brief & Requirements Compliance Checker), rate how badly this layout drifts from client brief steps, demand target, or sequential flow.',
-      criteria: ['fully compliant', 'minor alignment issue', 'noticeable backtracking', 'significant brief drift', 'fails mandatory brief requirement'],
-    },
-    maintenance: {
-      type: 'score',
-      instructions: 'As Hank Kowalski (Maintenance & Downtime Skeptic), rate the maintenance trap and single-point-of-failure downtime risk (boxed-in machines, zero backup on busy stages).',
-      criteria: ['easy service access', 'minor tightness', 'moderate downtime risk', 'cramped or zero-redundancy trap', 'unserviceable critical blocker'],
-    },
-  };
-
-  let decisionFailed = false;
-  try {
-    const dec = await decide(decisionContext, questions);
-    for (const av of agentVerdicts) {
-      const ans = dec.answers[av.role];
-      if (ans?.type === 'score') {
-        const risk = ans.score / 4;
-        av.decisionScore = risk;
-        for (const f of findings) {
-          if (f.role === av.role) f.decisionConfidence = risk;
-        }
-        // Only escalate to warning if Decisions flags high risk (>= 0.75) and deterministic had none
-        if (risk >= 0.78 && av.verdict === 'pass') {
-          av.verdict = 'warn';
-        }
-      }
-    }
-    emit({
-      stage: 'advocate',
-      actor: 'decisions',
-      title: `Decisions API scored all 5 specialist audits`,
-      detail: agentVerdicts
-        .map((a) => `${ADVOCATE_CHARACTERS[a.role].name.split(' ')[0]} ${a.decisionScore !== undefined ? `${Math.round(a.decisionScore * 100)}% risk` : a.verdict}`)
-        .join(' · '),
-      ms: dec.ms,
-      status: 'ok',
-    });
-  } catch (e) {
-    decisionFailed = true;
-    emit({
-      stage: 'advocate',
-      actor: 'decisions',
-      title: 'Decisions API risk calibration unavailable',
-      detail: (e as Error).message,
-      ms: 0,
-      status: 'fail',
-    });
-    if (!opts.fastGate) throw e;
-  }
-
-  // On full on-demand audits, ask Neon to sharpen the characters' spoken floor lines
-  let summary = det.summary;
-  if (!opts.fastGate && findings.length > 0 && !decisionFailed) {
-    emit({ stage: 'advocate', actor: 'neon', title: 'Refining floor inspector briefings', ms: 0, status: 'running' });
+  const inspect = async (role: AdvocateRole): Promise<AdvocateFinding[]> => {
+    const who = ADVOCATE_CHARACTERS[role];
+    const started = Date.now();
+    emit({ stage: 'advocate', actor: 'advocate', who: role, title: `${who.name} is ${TRADES[role].doing}`, ms: 0, status: 'running' });
     try {
-      const res = await interact<{ summary?: string; spokenRewrites?: { findingId: string; spokenLine: string; suggestedFixHint: string }[] }>({
+      const res = await interact<{ findings?: RawFinding[] }>({
         model: MODELS.neon,
         thinking: 'low',
-        schema: refinementSchema,
-        system: `You voice 5 realistic factory-floor devil's advocate inspectors standing beside specific machines. Rewrite each finding's spokenLine into a crisp, vivid 1-2 sentence first-person remark (under 28 words) naming the exact machine ID and grounded metric. Never invent numbers that are not in the input.`,
-        input: `Findings to sharpen:\n${JSON.stringify(
-          findings.map((f) => ({
-            findingId: f.id,
-            speaker: `${ADVOCATE_CHARACTERS[f.role].name} (${ADVOCATE_CHARACTERS[f.role].title})`,
-            severity: f.severity,
-            title: f.title,
-            evidence: f.evidence,
-            targetIds: f.targetIds,
-            currentSpokenLine: f.spokenLine,
-          })),
-        )}`,
+        maxOutputTokens: 6000,
+        schema: technicianSchema,
+        system: technicianSystem(role),
+        input: `${sheet}\n\nAlready measured by the simulator (do not repeat):\n${already}\n\nWrite your findings.`,
       });
-      if (res.json?.summary) summary = res.json.summary;
-      const byId = new Map((res.json?.spokenRewrites ?? []).map((r) => [r.findingId, r]));
-      for (const f of findings) {
-        const rw = byId.get(f.id);
-        if (rw?.spokenLine && rw.spokenLine.trim().length > 10) {
-          f.spokenLine = rw.spokenLine.trim();
-          f.source = 'gemini';
-        }
-        if (rw?.suggestedFixHint && rw.suggestedFixHint.trim().length > 6) {
-          f.suggestedFixHint = rw.suggestedFixHint.trim();
-        }
+      const seen = new Set<string>();
+      const out: AdvocateFinding[] = [];
+      for (const raw of Array.isArray(res.json?.findings) ? res.json.findings : []) {
+        const f = toFinding(role, raw, out.length, spec);
+        // one finding per machine per technician: the second is usually the first reworded
+        if (!f || seen.has(f.targetIds[0] ?? 'plant')) continue;
+        seen.add(f.targetIds[0] ?? 'plant');
+        out.push(f);
+        if (out.length >= MAX_PER_TECHNICIAN) break;
       }
-      emit({
-        stage: 'advocate',
-        actor: 'neon',
-        title: `5 inspectors briefed ${findings.length} finding${findings.length === 1 ? '' : 's'}`,
-        detail: summary,
-        ms: res.ms,
-        status: 'ok',
-      });
+      emit({ stage: 'advocate', actor: 'neon', who: role, title: `${who.name} wrote ${out.length} finding${out.length === 1 ? '' : 's'}`, detail: out[0]?.title, ms: Date.now() - started, status: 'ok' });
+      return out;
     } catch (e) {
-      emit({
-        stage: 'advocate',
-        actor: 'neon',
-        title: 'Using deterministic floor briefings',
-        detail: (e as Error).message,
-        ms: 0,
-        status: 'retry',
+      emit({ stage: 'advocate', actor: 'neon', who: role, title: `${who.name} could not finish the inspection`, detail: (e as Error).message, ms: Date.now() - started, status: 'fail' });
+      return [];
+    }
+  };
+  const written = dedupe((await Promise.all(ADVOCATE_ROLES.map(inspect))).flat());
+
+  // The checker never wrote any of this. It sees the sheet and one finding at a time.
+  let kept = written;
+  if (written.length) {
+    emit({ stage: 'check', actor: 'decisions', title: 'Checking each finding is specific to this design', ms: 0, status: 'running' });
+    try {
+      const questions: Record<string, Question> = {};
+      written.forEach((f, i) => {
+        const st = spec.stations.find((s) => s.id === f.targetIds[0]);
+        questions[`f${i}`] = {
+          type: 'noul',
+          instructions: `The input is the data sheet of a factory design. A reviewer wrote this finding about ${st ? `machine ${st.id} (${st.name ?? st.type})` : 'the plant as a whole'}: "${f.title}. ${f.evidence} Action: ${f.action}" Is this a specific defect of this particular design, naming a real machine or a missing item and giving a concrete reason that can be checked, rather than generic advice that would be true of any factory?`,
+        };
       });
+      const d = await decide(sheet, questions);
+      written.forEach((f, i) => {
+        const a = d.answers[`f${i}`];
+        if (a?.type === 'noul') f.decisionConfidence = a.noul;
+      });
+      kept = written.filter((f) => f.decisionConfidence === undefined || f.decisionConfidence >= KEEP_AT);
+      const dropped = written.length - kept.length;
+      emit({ stage: 'check', actor: 'decisions', title: `Checker kept ${kept.length} of ${written.length} findings`, detail: dropped ? `dropped ${dropped} as generic advice` : 'every one names a machine and a checkable reason', ms: d.ms, status: 'ok' });
+    } catch (e) {
+      emit({ stage: 'check', actor: 'decisions', title: 'Checker unavailable; findings are shown unchecked', detail: (e as Error).message, ms: 0, status: 'fail' });
     }
   }
 
-  const blockerCount = findings.filter((f) => f.severity === 'blocker').length;
-  const warningCount = findings.filter((f) => f.severity === 'warning').length;
-  const advisoryCount = findings.filter((f) => f.severity === 'advisory').length;
-  const verdict: AdvocateVerdict = blockerCount > 0 ? 'veto' : warningCount > 0 ? 'warn' : 'pass';
-  const walkPlans = computeCharacterWalkPlans(spec, findings);
-
-  emit({
-    stage: 'advocate',
-    actor: 'advocate',
-    title:
-      verdict === 'veto'
-        ? `Panel vetoed: ${blockerCount} blocker${blockerCount > 1 ? 's' : ''}, ${warningCount} warning${warningCount === 1 ? '' : 's'}`
-        : verdict === 'warn'
-          ? `Panel flagged ${warningCount} warning${warningCount === 1 ? '' : 's'} (0 blockers)`
-          : 'Panel cleared layout with 0 blockers',
-    detail: findings.slice(0, 2).map((f) => `${ADVOCATE_CHARACTERS[f.role].name.split(' ')[0]}: ${f.title}`).join(' · ') || summary,
-    ms: Date.now() - t0,
-    status: verdict === 'veto' ? 'fail' : 'ok',
-  });
-
-  return {
-    verdict,
-    summary,
-    blockerCount,
-    warningCount,
-    advisoryCount,
-    findings,
-    agentVerdicts,
-    walkPlans,
-    ms: Date.now() - t0,
-    mode: 'full',
-  };
+  const report = buildReport(spec, [...measured.findings, ...kept], 'full', crewStartTargets(spec, ev.metrics));
+  for (const role of ADVOCATE_ROLES) {
+    const mine = report.findings.filter((f) => f.role === role);
+    emit({ stage: 'advocate', actor: 'advocate', who: role, title: `${ADVOCATE_CHARACTERS[role].name}: ${mine.length ? `${mine.length} issue${mine.length === 1 ? '' : 's'}` : 'nothing found'}`, detail: mine[0]?.title, ms: 0, status: mine.some((f) => f.severity === 'blocker') ? 'fail' : 'ok' });
+  }
+  emit({ stage: 'advocate', actor: 'advocate', title: `Evals done: ${report.blockerCount} blocker${report.blockerCount === 1 ? '' : 's'}, ${report.warningCount} warning${report.warningCount === 1 ? '' : 's'}, ${report.advisoryCount} note${report.advisoryCount === 1 ? '' : 's'}`, detail: report.findings[0]?.title, ms: Date.now() - t0, status: report.verdict === 'veto' ? 'fail' : 'ok' });
+  return { ...report, ms: Date.now() - t0 };
 }
 
 /**
@@ -274,7 +370,7 @@ export async function proposeAdvocateFix(
   emit({
     stage: 'fix',
     actor: 'fixer',
-    title: `Elena Vasquez drafting fix for ${targets.length} finding${targets.length > 1 ? 's' : ''}`,
+    title: `Drafting a layout fix for ${targets.length} finding${targets.length > 1 ? 's' : ''}`,
     ms: 0,
     status: 'running',
   });
@@ -287,10 +383,10 @@ export async function proposeAdvocateFix(
       model: MODELS.neon,
       thinking: 'low',
       schema: proposalSchema,
-      system: `You are Elena Vasquez, a surgical industrial layout fixer. Given a valid FactorySpec, its metrics, and specific Devil's Advocate findings, propose up to 3 concrete, rule-valid candidate patches (each a minimal list of EditOps) that resolve those exact findings without dropping throughput below demand or creating new outer-wall pinch gaps (keep stations either flush at 0 m against a wall or >= 1.5 m clear of outer walls).
+      system: `You fix factory layouts. Given a valid FactorySpec, its metrics, and specific review findings, propose up to 3 concrete, rule-valid candidate patches (each a minimal list of EditOps) that resolve those exact findings without dropping throughput below demand or creating new outer-wall pinch gaps (keep stations either flush at 0 m against a wall or >= 1.5 m clear of outer walls).
 Ops: move {id,x,y}; rotate {id,rot}; add {station}; remove {id}; moveDock {index,wall,offset}; setParam {path,value} (path: forklifts or stations.<id>.<field>). Set unused op fields to null. Do not lower demandPerHour.
 ${GEOMETRY_RULES}`,
-      input: `Current FactorySpec:\n${JSON.stringify(lean(spec))}\n\nCurrent metrics:\n${situation(spec, baseEval.metrics)}\n\nTarget Devil's Advocate findings to resolve:\n${JSON.stringify(
+      input: `Current FactorySpec:\n${JSON.stringify(lean(spec))}\n\nCurrent metrics:\n${situation(spec, baseEval.metrics)}\n\nFindings to resolve:\n${JSON.stringify(
         targets.map((f) => ({
           id: f.id,
           role: f.role,
@@ -351,12 +447,12 @@ ${GEOMETRY_RULES}`,
 
   // 3. Simulate & re-audit every candidate to rank by resolved issues + metrics
   emit({ stage: 'fix', actor: 'engine', title: `Simulating and re-auditing ${pool.length} fix candidate${pool.length === 1 ? '' : 's'}`, ms: 0, status: 'running' });
-  const targetIdSet = new Set(targets.map((f) => f.id));
   const scored: {
     cand: (typeof pool)[number];
     deltas: MetricDeltas;
     postAudit: AdvocateReport;
     resolvedCount: number;
+    resolvedIds: string[];
     score: number;
   }[] = [];
 
@@ -365,10 +461,11 @@ ${GEOMETRY_RULES}`,
     if (!ev.ok) continue;
     const postAudit = runDeterministicAdvocateAudit(cand.spec, ev.metrics, ev.routes, requirements);
     const remainingTargetIds = new Set(postAudit.findings.map((f) => f.id));
-    let resolvedTargetCount = 0;
-    for (const id of targetIdSet) {
-      if (!remainingTargetIds.has(id)) resolvedTargetCount++;
-    }
+    // A measured finding is resolved when the engines stop reporting it. A technician's finding cannot
+    // be re-measured, so it only counts when the fix actually moves the machine it is about.
+    const touched = new Set(cand.ops.map((o) => ('id' in o ? o.id : null)).filter(Boolean));
+    const resolvedIds = targets.filter((t) => (t.source === 'gemini' ? t.targetIds.some((id) => touched.has(id)) : !remainingTargetIds.has(t.id))).map((t) => t.id);
+    const resolvedTargetCount = resolvedIds.length;
     const totalReduction = Math.max(0, baseAudit.findings.length - postAudit.findings.length);
     const resolvedCount = Math.max(resolvedTargetCount, totalReduction);
     const deltas = deltasBetween(baseEval.metrics, ev.metrics);
@@ -381,7 +478,7 @@ ${GEOMETRY_RULES}`,
       demandPenalty +
       (ev.metrics.cost.costPerUnit / Math.max(0.01, baseEval.metrics.cost.costPerUnit)) * 1.5 +
       (ev.metrics.sim.leadTimeSec.median / Math.max(1, baseEval.metrics.sim.leadTimeSec.median));
-    scored.push({ cand, deltas, postAudit, resolvedCount, score });
+    scored.push({ cand, deltas, postAudit, resolvedCount, resolvedIds, score });
   }
 
   scored.sort((a, b) => a.score - b.score);
@@ -414,12 +511,12 @@ ${GEOMETRY_RULES}`,
       ? `clears ${best.resolvedCount} flagged issue${best.resolvedCount === 1 ? '' : 's'}`
       : buildStr || 'tightens the floor geometry';
 
-  const spokenSummary = `I simulated ${article} ${opCount}-step fix: ${best.cand.label}. It ${resolveClause}, ${buildStr && best.resolvedCount > 0 ? `${buildStr}, ` : ''}${leadStr}, and ${costStr}. Click apply when you want me to save it.`;
+  const spokenSummary = `Simulated ${article} ${opCount}-step fix: ${best.cand.label}. It ${resolveClause}, ${buildStr && best.resolvedCount > 0 ? `${buildStr}, ` : ''}${leadStr}, and ${costStr}.`;
 
   emit({
     stage: 'fix',
     actor: 'fixer',
-    title: `Elena Vasquez verified fix: ${best.cand.label}`,
+    title: `Verified fix: ${best.cand.label}`,
     detail: `Resolved ${best.resolvedCount} issue${best.resolvedCount === 1 ? '' : 's'} · ${best.postAudit.blockerCount} blocker${best.postAudit.blockerCount === 1 ? '' : 's'} left`,
     ms: Date.now() - t0,
     status: 'ok',
@@ -434,6 +531,7 @@ ${GEOMETRY_RULES}`,
     spec: best.cand.spec,
     deltas: best.deltas,
     resolvedCount: best.resolvedCount,
+    resolvedIds: best.resolvedIds,
     remainingBlockers: best.postAudit.blockerCount,
     remainingWarnings: best.postAudit.warningCount,
     postAudit: best.postAudit,
@@ -444,7 +542,7 @@ ${GEOMETRY_RULES}`,
 
 /** Synthesize WAV speech for one of the 6 floor characters using Gemini 3.8 Flash-Lite TTS. */
 export async function synthesizeAdvocateSpeech(role: CharacterRole, text: string) {
-  const char = ADVOCATE_CHARACTERS[role] ?? ADVOCATE_CHARACTERS.stress;
+  const char = ADVOCATE_CHARACTERS[role] ?? ADVOCATE_CHARACTERS.process;
   return speakText({ text, voice: char.voice, style: char.style });
 }
 

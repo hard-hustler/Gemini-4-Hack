@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'vitest';
 import { workshop } from '../fixtures/workshop';
+import type { AdvocateFinding } from '../contracts';
 import { applyOp, applyOps } from '../spec';
 import {
   ADVOCATE_CHARACTERS,
   ADVOCATE_ROLES,
   buildDeterministicFixCandidates,
+  addSupportEquipment,
+  buildReport,
   computeCharacterWalkPlans,
   countAccessibleSides,
+  crewStartTargets,
   runDeterministicAdvocateAudit,
   wallPinches,
 } from './advocate';
@@ -80,7 +84,7 @@ describe('advocate engine', () => {
     if (!ev.ok) return;
 
     const report = runDeterministicAdvocateAudit(tight, ev.metrics, ev.routes);
-    const stressFinding = report.findings.find((f) => f.role === 'stress');
+    const stressFinding = report.findings.find((f) => f.role === 'process');
     assert.ok(stressFinding, 'Marcus Cole must flag throughput/surge saturation');
 
     const fixes = buildDeterministicFixCandidates(tight, [stressFinding]);
@@ -124,5 +128,61 @@ describe('advocate engine', () => {
     assert.equal(plansWithFixer.length, 6);
     const elena = plansWithFixer.find((p) => p.role === 'fixer');
     assert.ok(elena && elena.targetId === 'prep1' && elena.path.length >= 1);
+  });
+
+  const missing = (targetIds: string[], over: Partial<AdvocateFinding> = {}): AdvocateFinding => ({
+    id: 'utilities-t1-plant',
+    role: 'utilities',
+    severity: 'blocker',
+    title: 'No compressed air on the floor',
+    evidence: 'Six machines need dry air at 6 bar and no compressor is on the sheet.',
+    metricDeltaHint: '',
+    targetIds,
+    suggestedFixHint: 'Add a screw compressor with dryer.',
+    action: 'Add a screw compressor with dryer.',
+    fix: { kind: 'equipment', equipment: { name: 'Screw compressor with dryer', w: 1.8, d: 1, h: 1.6, powerKw: 15, needsWater: false, price: 18000 } },
+    spokenLine: '',
+    source: 'gemini',
+    ...over,
+  });
+
+  it('places equipment a finding says is missing, legally and beside the machine it serves', () => {
+    const target = workshop.stations[2];
+    const added = addSupportEquipment(workshop, missing([target.id]));
+    assert.ok(added, 'there is room on the fixture floor');
+    assert.deepEqual(validate(added.spec), []);
+    assert.equal(added.spec.stations.length, workshop.stations.length + 1);
+    assert.equal(added.station.price, 18000);
+    assert.equal(added.station.zone, target.zone);
+    // support equipment is not a process step: the flow and the throughput are untouched
+    assert.equal(added.spec.routing.includes(added.station.type), false);
+    const before = evaluate(workshop, 6);
+    const after = evaluate(added.spec, 6);
+    assert.ok(before.ok && after.ok);
+    assert.equal(after.metrics.sim.unitsPerHour.median, before.metrics.sim.unitsPerHour.median);
+    assert.ok(after.metrics.cost.buildCost > before.metrics.cost.buildCost);
+    // a second unit of the same kind gets its own id
+    const again = addSupportEquipment(added.spec, missing([]));
+    assert.ok(again && again.station.id !== added.station.id);
+  });
+
+  it('does nothing for a finding whose fix is not equipment', () => {
+    assert.equal(addSupportEquipment(workshop, missing([], { fix: { kind: 'spec' } })), null);
+    assert.equal(addSupportEquipment(workshop, missing([], { fix: undefined })), null);
+  });
+
+  it('builds a report worst first and sends every technician somewhere', () => {
+    const ev = evaluate(workshop, 6);
+    assert.ok(ev.ok);
+    const note = missing([workshop.stations[0].id], { id: 'a', severity: 'advisory', role: 'safety' });
+    const blocker = missing([workshop.stations[1].id], { id: 'b', severity: 'blocker', role: 'machines' });
+    const report = buildReport(workshop, [note, blocker], 'full', crewStartTargets(workshop, ev.metrics));
+    assert.deepEqual(report.findings.map((f) => f.id), ['b', 'a']);
+    assert.equal(report.verdict, 'veto');
+    assert.equal(report.blockerCount, 1);
+    assert.equal(report.walkPlans.length, ADVOCATE_ROLES.length);
+    assert.equal(report.walkPlans.find((p) => p.role === 'machines')?.targetId, workshop.stations[1].id);
+    const starts = crewStartTargets(workshop, ev.metrics);
+    for (const role of ADVOCATE_ROLES) assert.ok(workshop.stations.some((s) => s.id === starts[role]), `${role} has a real machine to start at`);
   });
 });

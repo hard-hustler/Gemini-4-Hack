@@ -4,7 +4,7 @@
 
 import { Billboard, Line, Text } from '@react-three/drei';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { AdvocateCharacter, CharacterRole, CharacterWalkPlan } from '../contracts';
 import { ADVOCATE_CHARACTERS } from '../engines/advocate';
@@ -106,6 +106,53 @@ function RoleProp({ prop, accent }: { prop: AdvocateCharacter['prop']; accent: s
   }
 }
 
+/** The note over a technician's head: what they are doing, then what they found. */
+export interface CrewBubble {
+  text: string;
+  tone: 'writing' | 'blocker' | 'warning' | 'advisory' | 'clear';
+}
+
+const BUBBLE_EDGE: Record<CrewBubble['tone'], string> = { writing: '#b8ae9c', blocker: '#bd4630', warning: '#df7f2e', advisory: '#8b8477', clear: '#2f7d57' };
+
+/** A speech bubble that always faces the camera. Sized from the text, and larger on a large floor so it stays readable. */
+function Bubble({ bubble, y, scale }: { bubble: CrewBubble; y: number; scale: number }) {
+  const [dots, setDots] = useState(1);
+  useEffect(() => {
+    if (bubble.tone !== 'writing') return;
+    const t = setInterval(() => setDots((d) => (d % 3) + 1), 420);
+    return () => clearInterval(t);
+  }, [bubble.tone]);
+  const raw = bubble.tone === 'writing' ? `${bubble.text} ${'.'.repeat(dots)}${' '.repeat(3 - dots)}` : bubble.text;
+  const text = raw.length > 78 ? `${raw.slice(0, 76).replace(/\s+\S*$/, '')}…` : raw;
+  const perLine = 27;
+  const lines = Math.max(1, Math.ceil(text.length / perLine));
+  const w = Math.min(text.length, perLine) * 0.112 + 0.42;
+  const h = lines * 0.27 + 0.22;
+  return (
+    <Billboard position={[0, y, 0]} scale={scale}>
+      <mesh position={[0, h / 2 + 0.12, -0.02]} renderOrder={28}>
+        <planeGeometry args={[w + 0.07, h + 0.07]} />
+        <meshBasicMaterial color={BUBBLE_EDGE[bubble.tone]} depthTest={false} />
+      </mesh>
+      <mesh position={[0, 0.12, -0.02]} rotation={[0, 0, Math.PI / 4]} renderOrder={28}>
+        <planeGeometry args={[0.2, 0.2]} />
+        <meshBasicMaterial color={BUBBLE_EDGE[bubble.tone]} depthTest={false} />
+      </mesh>
+      <mesh position={[0, h / 2 + 0.12, -0.01]} renderOrder={29}>
+        <planeGeometry args={[w, h]} />
+        <meshBasicMaterial color="#fffdf9" depthTest={false} />
+      </mesh>
+      <mesh position={[0, 0.155, -0.01]} rotation={[0, 0, Math.PI / 4]} renderOrder={29}>
+        <planeGeometry args={[0.15, 0.15]} />
+        <meshBasicMaterial color="#fffdf9" depthTest={false} />
+      </mesh>
+      <Text position={[0, h / 2 + 0.12, 0]} fontSize={0.2} lineHeight={1.3} maxWidth={w - 0.3} textAlign="center" color={INK} anchorX="center" anchorY="middle" renderOrder={30} material-depthTest={false} material-depthWrite={false}>
+        {text}
+      </Text>
+    </Billboard>
+  );
+}
+
 function CharacterAvatar({
   spec,
   plan,
@@ -113,9 +160,11 @@ function CharacterAvatar({
   isSpeaking,
   animate,
   onSelect,
+  bubble,
 }: {
   spec: FactorySpec;
   plan: CharacterWalkPlan;
+  bubble?: CrewBubble;
   isActive: boolean;
   isSpeaking: boolean;
   animate: boolean;
@@ -243,7 +292,7 @@ function CharacterAvatar({
     }
   });
 
-  const hasHardHat = plan.role === 'stress' || plan.role === 'safety' || plan.role === 'maintenance' || plan.role === 'fixer';
+  const hasHardHat = plan.role !== 'electrical';
   const showTag = isSpeaking || isActive || hover;
   const firstName = char.name.split(' ')[0];
   const handleClick = (e: ThreeEvent<PointerEvent>) => {
@@ -328,7 +377,7 @@ function CharacterAvatar({
             <meshStandardMaterial color={char.vestColor} roughness={0.85} />
           </mesh>
           {/* High-vis safety stripes for floor safety / stress / fixer roles */}
-          {(plan.role === 'safety' || plan.role === 'stress' || plan.role === 'fixer') && (
+          {(plan.role === 'safety' || plan.role === 'process' || plan.role === 'fixer') && (
             <mesh position={[0, 0.95, 0]}>
               <boxGeometry args={[0.435, 0.06, 0.252]} />
               <meshStandardMaterial color="#f5efe2" roughness={0.5} />
@@ -460,6 +509,7 @@ function CharacterAvatar({
             </Text>
           </Billboard>
         )}
+        {bubble && <Bubble bubble={bubble} y={showTag ? (isSpeaking ? 3.0 : 2.78) : 2.42} scale={Math.max(1.4, Math.min(6, Math.max(spec.floor.width, spec.floor.depth) / 15))} />}
       </group>
     </>
   );
@@ -472,9 +522,11 @@ export function AdvocateCharacters({
   speakingRole,
   animate = true,
   onSelectCharacter,
+  bubbles,
 }: {
   spec: FactorySpec;
   walkPlans: CharacterWalkPlan[];
+  bubbles?: Partial<Record<CharacterRole, CrewBubble>>;
   activeRole?: CharacterRole | null;
   speakingRole?: CharacterRole | null;
   animate?: boolean;
@@ -491,6 +543,7 @@ export function AdvocateCharacters({
           isSpeaking={speakingRole === plan.role}
           animate={animate}
           onSelect={onSelectCharacter}
+          bubble={bubbles?.[plan.role]}
         />
       ))}
     </group>

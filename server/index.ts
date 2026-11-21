@@ -171,7 +171,7 @@ app.post('/api/advocate/speak', async (req, res) => {
   try {
     const { role, text } = req.body as { role?: string; text?: string };
     if (!text?.trim()) return void res.status(400).json({ error: 'text is required' });
-    const charRole = isCharacterRole(role) ? role : 'stress';
+    const charRole = isCharacterRole(role) ? role : 'process';
     const out = await synthesizeAdvocateSpeech(charRole, text.trim());
     res.json(out);
   } catch (e) {

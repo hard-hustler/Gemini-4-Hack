@@ -6,7 +6,7 @@ import type { CharacterRole, CharacterWalkPlan } from '../contracts';
 import type { Routes } from '../engines/route';
 import type { MachineModel } from '../model3d';
 import { dockPoint, footprint, snap, type FactorySpec, type Point, type Station } from '../spec';
-import { AdvocateCharacters } from './AdvocateCharacters';
+import { AdvocateCharacters, type CrewBubble } from './AdvocateCharacters';
 import { BONE, Equipment, INK, ORANGE } from './Equipment';
 import { StudioEnv } from './ModelMesh';
 import { Conveyors, Zones } from './Plant';
@@ -31,6 +31,8 @@ export interface SceneProps {
   bottleneck?: string;
   selectedId?: string | null;
   walkPlans?: CharacterWalkPlan[];
+  /** what each crew member is saying, drawn over their head */
+  bubbles?: Partial<Record<CharacterRole, CrewBubble>>;
   activeRole?: CharacterRole | null;
   speakingRole?: CharacterRole | null;
   interactive?: boolean;
@@ -363,6 +365,7 @@ function World({
   bottleneck,
   selectedId,
   walkPlans = [],
+  bubbles,
   activeRole,
   speakingRole,
   interactive = true,
@@ -377,7 +380,8 @@ function World({
   const tour = useTour(spec, routes);
   const span = Math.max(spec.floor.width, spec.floor.depth);
   // a plant: too many machines for per-part meshes and per-station labels
-  const plant = spec.stations.length > 30;
+  // a plant is drawn with merged, simplified machines; a line keeps full detail even once support equipment is added
+  const plant = spec.floor.cellSize >= 1 || spec.stations.length > 40;
   const conveyor = spec.transport === 'conveyor';
   return (
     <>
@@ -435,6 +439,7 @@ function World({
         <AdvocateCharacters
           spec={spec}
           walkPlans={walkPlans}
+          bubbles={bubbles}
           activeRole={activeRole}
           speakingRole={speakingRole}
           animate={animate}
