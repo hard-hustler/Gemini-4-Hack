@@ -48,7 +48,24 @@ interface Inspection {
 
 const b64 = (dataUrl: string) => dataUrl.slice(dataUrl.indexOf(',') + 1);
 
-export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onApply: (items: Record<string, CatalogItem>, events: TraceEvent[]) => void; onClose: () => void }) {
+/** How many agents work at once. The rest wait their turn, so a 25-step plant does not open 25 model calls together. */
+const POOL = 8;
+
+export function Swarm({
+  lines,
+  concept = false,
+  context,
+  onApply,
+  onClose,
+}: {
+  lines: EquipmentLine[];
+  /** plant equipment is not sold on Shop: design it from what each step does instead of scouting */
+  concept?: boolean;
+  /** what the plant makes, passed to agents designing from the process */
+  context?: string;
+  onApply: (items: Record<string, CatalogItem>, events: TraceEvent[]) => void;
+  onClose: () => void;
+}) {
   const active = lines.filter((l) => l.qty > 0);
   const [agents, setAgents] = useState<Agent[]>(() => active.map((l) => ({ key: l.stepType, label: l.label, stage: 'queued', reached: [], renders: [], log: [], round: 0, startedAt: Date.now() })));
   const [elapsed, setElapsed] = useState(0);
@@ -64,11 +81,23 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
       if (e.status === 'running') return patch(key, () => ({ live: e.title }));
       patch(key, (a) => ({ live: undefined, log: [...a.log, { text: e.detail ? `${e.title}: ${e.detail}` : e.title, tone: e.status === 'fail' ? 'fail' : e.status === 'retry' ? 'retry' : 'ok' }] }));
     };
-    const step = { type: line.stepType, label: line.label, itemName: line.item.source === 'builtin' ? line.item.name : line.label, cycleTimeSec: line.item.cycleTimeSec, operators: line.item.operators };
+    const step = { type: line.stepType, label: line.label, itemName: line.item.source === 'builtin' ? line.item.name : line.label, cycleTimeSec: line.item.cycleTimeSec, operators: line.item.operators, w: line.item.footprint.w, d: line.item.footprint.d, context };
+    const imagined: ShopListing = { title: step.itemName, seller: 'Designed from the process', price: line.item.price, currency: 'USD', url: '', variantId: `concept-${line.stepType}`, description: `${step.itemName} for the ${line.label} step. ${context ?? ''}` };
     const began = Date.now();
     try {
-      enter(key, 'scout');
-      const sc = await apiStream<{ listing: ShopListing; fit: number }>('/api/agent/scout', { step }, onEvent);
+      let sc: { listing: ShopListing; fit: number } = { listing: imagined, fit: 1 };
+      if (!concept) {
+        enter(key, 'scout');
+        try {
+          const found = await apiStream<{ listing: ShopListing; fit: number }>('/api/agent/scout', { step }, onEvent);
+          // nothing on Shop really fits: design the equipment from the step instead of modelling the wrong product
+          if (found.fit >= 0.5) sc = found;
+          else patch(key, (a) => ({ log: [...a.log, { text: `Best Shop listing fits only ${Math.round(found.fit * 100)}%, so the equipment is designed from the process instead`, tone: 'retry' }] }));
+        } catch {
+          patch(key, (a) => ({ log: [...a.log, { text: 'Shop has nothing for this step, so the equipment is designed from the process instead', tone: 'retry' }] }));
+        }
+      }
+      const imaginedOne = sc.listing === imagined;
       patch(key, () => ({ listing: sc.listing }));
 
       enter(key, 'model');
@@ -77,7 +106,9 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
 
       let model = ds.model;
       let best: { model: MachineModel; ins: Inspection; round: number } | null = null;
-      for (let round = 1; round <= MAX_ROUNDS; round++) {
+      // with no photo to match there is less to gain from a third round, and a plant has many machines to get through
+      const rounds = imaginedOne ? 2 : MAX_ROUNDS;
+      for (let round = 1; round <= rounds; round++) {
         enter(key, 'render');
         patch(key, () => ({ round, parts: model.parts.length, live: 'Rendering the model' }));
         const png = await renderModel(model);
@@ -87,7 +118,7 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
         const ins = await apiStream<Inspection>('/api/agent/inspect', { listing: sc.listing, model, render: b64(png) }, onEvent);
         if (!best || ins.likeness > best.ins.likeness) best = { model, ins, round };
         patch(key, () => ({ likeness: best!.ins.likeness }));
-        if (ins.accepted || round === MAX_ROUNDS || !ins.problems.length) break;
+        if (ins.accepted || round === rounds || !ins.problems.length) break;
 
         enter(key, 'correct');
         const rv = await apiStream<{ model: MachineModel | null; errors: string[] }>('/api/agent/revise', { listing: sc.listing, step, model, render: b64(png), problems: ins.problems }, onEvent);
@@ -99,7 +130,7 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
       }
       const final = best!;
       const item: CatalogItem = {
-        id: `shop-${sc.listing.variantId.split('/').pop()}`,
+        id: imaginedOne ? `concept-${line.stepType}` : `shop-${sc.listing.variantId.split('/').pop()}`,
         name: ds.meta.name,
         stationType: line.stepType,
         footprint: final.model.size,
@@ -108,8 +139,8 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
         powerKw: ds.meta.powerKw,
         needsWater: ds.meta.needsWater,
         price: sc.listing.price,
-        source: 'shopify',
-        listing: { ...sc.listing, description: undefined },
+        source: imaginedOne ? 'builtin' : 'shopify',
+        listing: imaginedOne ? undefined : { ...sc.listing, description: undefined },
         model: final.model,
         modelChecks: { likeness: final.ins.likeness, coherent: final.ins.coherent, proportions: final.ins.proportions, accepted: final.ins.accepted, rounds: final.round, parts: final.model.parts.length, sawPhoto: ds.sawPhoto, dimsStated: ds.meta.dimsStated, fit: sc.fit },
         confidence: sc.fit,
@@ -125,7 +156,12 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    void Promise.all(active.map(runAgent));
+    // a small pool of workers drains the queue
+    const queue = [...active];
+    const worker = async () => {
+      for (let line = queue.shift(); line; line = queue.shift()) await runAgent(line);
+    };
+    void Promise.all(Array.from({ length: Math.min(POOL, queue.length) }, worker));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const running = agents.some((a) => a.stage !== 'done' && a.stage !== 'failed');
@@ -160,7 +196,10 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
         <div>
           <h2>Sourcing swarm</h2>
           <p>
-            {agents.length} agents, one per step. Each finds a real listing, models it part by part, renders it, and has an inspector compare the render with the listing photo.
+            {agents.length} agents, one per step, {Math.min(POOL, agents.length)} at a time.{' '}
+            {concept
+              ? 'Each designs the equipment its step needs part by part, renders it, and has an inspector judge the render.'
+              : 'Each finds a real listing, models it part by part, renders it, and has an inspector compare the render with the listing photo.'}
           </p>
         </div>
         <div className="swarm-stats">
@@ -196,7 +235,7 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
                   <Icon name="check" size={14} />
                 ) : a.stage === 'failed' ? (
                   <Icon name="x" size={14} />
-                ) : (
+                ) : a.stage === 'queued' ? null : (
                   <span className="spinner" />
                 )}
               </span>
@@ -213,7 +252,7 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
                   </div>
                 )}
               </div>
-              <div className="agent-photo">{a.listing?.image ? <img src={a.listing.image} alt="Listing photo" /> : <span className="agent-wait">Searching</span>}</div>
+              <div className="agent-photo">{a.listing?.image ? <img src={a.listing.image} alt="Listing photo" /> : <span className="agent-wait">{a.listing ? 'No listing: designed from the process' : a.stage === 'queued' ? 'Queued' : 'Searching'}</span>}</div>
             </div>
 
             <ol className="rail">
@@ -224,7 +263,7 @@ export function Swarm({ lines, onApply, onClose }: { lines: EquipmentLine[]; onA
               ))}
             </ol>
 
-            <p className="agent-title">{a.listing ? `${a.listing.title.slice(0, 64)} · ${money(a.listing.price)}` : ' '}</p>
+            <p className="agent-title">{a.listing ? `${a.listing.title.slice(0, 64)}${a.listing.image ? ` · ${money(a.listing.price)}` : ''}` : ' '}</p>
 
             <div className="agent-log">
               {a.log.slice(-3).map((l, k) => (

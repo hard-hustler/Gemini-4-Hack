@@ -121,7 +121,7 @@ export async function interact<T = unknown>(o: InteractOptions): Promise<Interac
   const queries: string[] = [];
   for (const s of res?.steps ?? []) {
     if (s.type === 'google_search_call') for (const q of s.arguments?.queries ?? []) queries.push(String(q));
-    if (s.type === 'model_output') for (const c of s.content ?? []) for (const a of c.annotations ?? []) if (a.type === 'url_citation' && a.url) sources.set(String(a.url), String(a.title ?? a.url));
+    if (s.type === 'model_output') for (const c of s.content ?? []) for (const a of c.annotations ?? []) if (a.type === 'url_citation' && a.url && ![...sources.values()].includes(String(a.title ?? a.url))) sources.set(String(a.url), String(a.title ?? a.url));
   }
   return { text, json, usage: (res?.usage ?? {}) as Record<string, unknown>, ms: Date.now() - started, sources: [...sources].map(([url, title]) => ({ url, title })), queries };
 }

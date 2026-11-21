@@ -9,6 +9,7 @@ import { dockPoint, footprint, snap, type FactorySpec, type Point, type Station 
 import { AdvocateCharacters } from './AdvocateCharacters';
 import { BONE, Equipment, INK, ORANGE } from './Equipment';
 import { StudioEnv } from './ModelMesh';
+import { Conveyors, Zones } from './Plant';
 
 export interface Layers {
   flow: boolean;
@@ -69,8 +70,9 @@ function Floor({ spec }: { spec: FactorySpec }) {
   const { width, depth } = spec.floor;
   const grid = useMemo(() => {
     const pts: number[] = [];
-    for (let x = 1; x < width; x += 1) pts.push(x - width / 2, 0.004, -depth / 2, x - width / 2, 0.004, depth / 2);
-    for (let z = 1; z < depth; z += 1) pts.push(-width / 2, 0.004, z - depth / 2, width / 2, 0.004, z - depth / 2);
+    const step = Math.max(width, depth) > 60 ? 5 : 1;
+    for (let x = step; x < width; x += step) pts.push(x - width / 2, 0.004, -depth / 2, x - width / 2, 0.004, depth / 2);
+    for (let z = step; z < depth; z += step) pts.push(-width / 2, 0.004, z - depth / 2, width / 2, 0.004, z - depth / 2);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     return g;
@@ -103,6 +105,7 @@ function StationNode({
   label,
   model,
   animate,
+  lite,
   interactive,
   onSelect,
   onDrag,
@@ -118,6 +121,7 @@ function StationNode({
   label: string;
   model?: MachineModel;
   animate: boolean;
+  lite: boolean;
   interactive: boolean;
   onSelect?: SceneProps['onSelect'];
   onDrag?: SceneProps['onDrag'];
@@ -181,7 +185,7 @@ function StationNode({
         </mesh>
       )}
       <group rotation={[0, rotated ? Math.PI / 2 : 0, 0]}>
-        <Equipment type={s.type} shape={s.shape} recipe={s.recipe} model={model} w={s.w} d={s.d} h={h} modelUrl={s.modelUrl} animate={animate} />
+        <Equipment type={s.type} shape={s.shape} recipe={s.recipe} model={model} w={s.w} d={s.d} h={h} modelUrl={s.modelUrl} animate={animate} lite={lite} />
       </group>
       {/* invisible grab box */}
       <mesh position={[0, h / 2, 0]} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerOver={() => interactive && setHover(true)} onPointerOut={() => setHover(false)}>
@@ -357,6 +361,9 @@ function World({
   const toWorld = useToWorld(spec);
   const tour = useTour(spec, routes);
   const span = Math.max(spec.floor.width, spec.floor.depth);
+  // a plant: too many machines for per-part meshes and per-station labels
+  const plant = spec.stations.length > 30;
+  const conveyor = spec.transport === 'conveyor';
   return (
     <>
       <StudioEnv intensity={0.35} />
@@ -378,10 +385,11 @@ function World({
           flagged={highlightedIds.includes(s.id)}
           hot={bottleneck === s.type}
           selected={selectedId === s.id}
-          showLabel={layers.labels}
+          showLabel={layers.labels && !plant}
           label={labelFor(spec, s)}
           model={s.catalogId ? models?.[s.catalogId] : undefined}
           animate={animate}
+          lite={plant}
           interactive={interactive}
           onSelect={onSelect}
           onDrag={onDrag}
@@ -389,9 +397,11 @@ function World({
         />
       ))}
       <Docks spec={spec} showLabel={layers.labels} />
+      <Zones spec={spec} labels={layers.labels} />
+      {conveyor && layers.flow && routes && <Conveyors spec={spec} routes={routes} animate={animate} />}
       {layers.routes && routes?.forklift.map((p, i) => <Line key={`r${i}`} points={p.points.map((q) => toWorld(q, 0.02))} color="#d8c7a8" lineWidth={2} />)}
-      {layers.flow && tour.pts.length > 1 && <Line points={tour.pts.map((p) => [p.x, 0.03, p.z] as V3)} color={ORANGE} lineWidth={3.5} />}
-      {layers.flow && animate && tour.total > 0 && <Movers tour={tour} carriers={Math.max(1, spec.forklifts ?? 1)} hot={bottleneck === 'forklift'} />}
+      {layers.flow && !conveyor && tour.pts.length > 1 && <Line points={tour.pts.map((p) => [p.x, 0.03, p.z] as V3)} color={ORANGE} lineWidth={3.5} />}
+      {layers.flow && !conveyor && animate && tour.total > 0 && <Movers tour={tour} carriers={Math.max(1, spec.forklifts ?? 1)} hot={bottleneck === 'forklift'} />}
       {layers.power && routes?.power.map((r) => <Line key={`p${r.id}`} points={r.points.map((q) => toWorld(q, 0.05))} color={RED} lineWidth={1.5} dashed dashSize={0.3} gapSize={0.2} />)}
       {layers.water && routes?.water.map((r) => <Line key={`w${r.id}`} points={r.points.map((q) => toWorld(q, 0.07))} color="#5b8fd6" lineWidth={1.5} dashed dashSize={0.3} gapSize={0.2} />)}
       {layers.power && (
@@ -416,7 +426,7 @@ function World({
           onSelectCharacter={onSelectCharacter}
         />
       )}
-      <OrbitControls makeDefault enableRotate={interactive} enablePan={interactive} enableZoom={interactive} maxPolarAngle={Math.PI / 2.15} minZoom={8} maxZoom={160} />
+      <OrbitControls makeDefault enableRotate={interactive} enablePan={interactive} enableZoom={interactive} maxPolarAngle={Math.PI / 2.15} minZoom={2} maxZoom={200} />
       <FitCamera spec={spec} insetRight={insetRight} />
     </>
   );

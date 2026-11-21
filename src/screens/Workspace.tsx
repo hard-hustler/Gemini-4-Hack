@@ -253,7 +253,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
 
   useEffect(() => () => stopAudio(), [stopAudio]);
 
-  const evaluation = useMemo(() => evaluate(draft), [draft]);
+  // thirty simulated shifts on a workshop; ten on a plant, where each one is far more work
+  const evaluation = useMemo(() => evaluate(draft, draft.stations.length > 40 ? 10 : 30), [draft]);
   const previewErrors = useMemo(() => (preview ? validate(preview) : []), [preview]);
   const metrics = evaluation.ok ? evaluation.metrics : current.metrics;
   const sim = metrics.sim;
@@ -674,7 +675,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
         <h1>{project.name}</h1>
         <p>
           {current.id}
-          {fixProposal ? ' · previewing fix' : dirty ? ', with unsaved changes' : ''} · {draft.floor.width} × {draft.floor.depth} m · {draft.stations.length} stations
+          {fixProposal ? ' · previewing fix' : dirty ? ', with unsaved changes' : ''} · {draft.floor.width} × {draft.floor.depth} m · {draft.stations.length} stations{draft.transport === 'conveyor' ? ' · conveyors' : ''}
         </p>
       </div>
 
@@ -720,7 +721,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   />
                   <Stat label="Lead time" value={num(sim.leadTimeSec.median / 60)} unit="min" sub={`${num(sim.wip.median)} units in progress`} />
                   <Stat label="Cost per unit" value={money(metrics.cost.costPerUnit)} sub={`${num(metrics.cost.kwhPerUnit, 2)} kWh a unit`} />
-                  <Stat label="Build cost" value={money(metrics.cost.buildCost)} sub={`${money(metrics.cost.utilityRunCost)} is power and water runs`} />
+                  <Stat label="Build cost" value={money(metrics.cost.buildCost)} sub={metrics.cost.conveyorCost ? `${money(metrics.cost.conveyorCost)} of it is conveyor` : `${money(metrics.cost.utilityRunCost)} is power and water runs`} />
                 </div>
                 {(versions.length > 1 || dirty) && (
                   <p className="say">
@@ -787,7 +788,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   </span>
                   <input type="range" min={5} max={Math.max(80, current.spec.demandPerHour * 2)} step={1} value={draft.demandPerHour} onChange={(e) => tryOp({ op: 'setParam', path: 'demandPerHour', value: Number(e.target.value) })} />
                 </label>
-                <label className="slider">
+                <label className="slider" style={draft.transport === 'conveyor' ? { display: 'none' } : undefined}>
                   <span>
                     Forklifts <b>{draft.forklifts ?? 1}</b>
                   </span>

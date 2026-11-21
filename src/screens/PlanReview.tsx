@@ -181,6 +181,10 @@ export function PlanReview({
             <span>Shipping</span>
             <b>{WALL[req.dockOut]} wall</b>
           </div>
+          <div className="fact">
+            <span>Moves by</span>
+            <b>{req.transport === 'conveyor' ? 'conveyor' : 'forklift'}</b>
+          </div>
         </div>
 
         {checked && (
@@ -205,12 +209,17 @@ export function PlanReview({
                 </p>
               </div>
               <button className="ghost" onClick={() => setSwarm('open')} disabled={run.busy || stations === 0}>
-                {swarm === 'hidden' ? 'Show the swarm' : 'Source real equipment'}
+                {swarm === 'hidden' ? 'Show the swarm' : req.research ? 'Design the equipment' : 'Source real equipment'}
               </button>
             </div>
             <div className="equipment">
-              {lines.map((l, i) => (
-                <article key={l.stepType} className={`equip${l.qty === 0 ? ' off' : ''}`}>
+              {lines.map((l, i) => {
+                const zone = req.steps.find((x) => x.type === l.stepType)?.zone;
+                const prev = i > 0 ? req.steps.find((x) => x.type === lines[i - 1].stepType)?.zone : undefined;
+                return (
+                <div key={l.stepType}>
+                {zone && zone !== prev && <h3 className="zone-head">{zone}</h3>}
+                <article className={`equip${l.qty === 0 ? ' off' : ''}`}>
                   <MachineThumb item={l.item} />
                   <div className="equip-body">
                     <span>
@@ -261,11 +270,39 @@ export function PlanReview({
                     Replace
                   </button>
                 </article>
-              ))}
+                </div>
+                );
+              })}
             </div>
           </section>
 
           <aside className="plan-side">
+            {req.research && (
+              <div>
+                <h2>Research</h2>
+                <p className="muted small">
+                  This is a large project, so the harness researched how it is really made before planning.
+                  {req.research.queries.length ? ` It searched: ${req.research.queries.slice(0, 4).join('; ')}.` : ''}
+                </p>
+                {req.research.sources.length > 0 && (
+                  <p className="small">
+                    Sources:{' '}
+                    {req.research.sources.slice(0, 8).map((src, k) => (
+                      <span key={src.url}>
+                        {k > 0 ? ', ' : ''}
+                        <a href={src.url} target="_blank" rel="noreferrer">
+                          {src.title}
+                        </a>
+                      </span>
+                    ))}
+                  </p>
+                )}
+                <details className="research-notes">
+                  <summary>Read the notes</summary>
+                  <p className="brief-text">{req.research.summary}</p>
+                </details>
+              </div>
+            )}
             <div>
               <h2>Assumed</h2>
               {req.assumptions.length ? (
@@ -308,6 +345,8 @@ export function PlanReview({
         <div style={swarm === 'hidden' ? { display: 'none' } : undefined}>
           <Swarm
             lines={lines}
+            concept={!!req.research}
+            context={req.summary}
             onClose={() => setSwarm((cur) => (cur === 'open' ? 'hidden' : null))}
             onApply={(items, events) => {
               const models = { ...(project.models ?? {}) };
