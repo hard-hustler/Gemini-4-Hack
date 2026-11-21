@@ -1,0 +1,6 @@
+{
+  "name": "FORGEWORKS",
+  "description": "Browser-based 3D factory simulation platform with procedural machinery, Web Worker fixed-timestep physics, analytics, and automated maintenance drones.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
