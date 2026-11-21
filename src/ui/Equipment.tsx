@@ -6,6 +6,8 @@ import { Edges, useGLTF } from '@react-three/drei';
 import { Component, Suspense, useMemo, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { buildParts, defaultRecipe, TONE_HEX, type MachineRecipe, type Part } from '../machines';
+import type { MachineModel } from '../model3d';
+import { ModelMesh } from './ModelMesh';
 
 /** Edge lines keep same-coloured parts apart: an all-black cart still reads as a cart. */
 const EDGE: Record<string, string> = { ink: '#5d6266', bone: '#cfc6b4', steel: '#9a9d9f', wood: '#b8946a', orange: '#b9631c', red: '#a43b2a', green: '#35775a', blue: '#40699f', yellow: '#b98f2b', glass: '#7d99ad' };
@@ -75,9 +77,30 @@ class Fallback extends Component<{ fallback: ReactNode; children: ReactNode }, {
 }
 
 /** One piece of equipment standing on y = 0, centred on the origin. w, d, h are the footprint in metres. */
-export function Equipment({ type, shape, recipe, w, d, h, modelUrl }: { type: string; shape?: string; recipe?: MachineRecipe; w: number; d: number; h: number; modelUrl?: string }) {
+export function Equipment({
+  type,
+  shape,
+  recipe,
+  model,
+  w,
+  d,
+  h,
+  modelUrl,
+  animate = true,
+}: {
+  type: string;
+  shape?: string;
+  recipe?: MachineRecipe;
+  /** a free-form model designed by an agent; drawn in preference to the recipe */
+  model?: MachineModel;
+  w: number;
+  d: number;
+  h: number;
+  modelUrl?: string;
+  animate?: boolean;
+}) {
   const built = useMemo(() => recipe ?? defaultRecipe(type, { w, d, h }, shape), [recipe, type, shape, w, d, h]);
-  const drawn = <Machine recipe={built} />;
+  const drawn = model ? <ModelMesh model={model} animate={animate} /> : <Machine recipe={built} />;
   if (!modelUrl) return drawn;
   return (
     <Fallback fallback={drawn}>

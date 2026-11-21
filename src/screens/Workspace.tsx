@@ -112,7 +112,7 @@ function DeltaLine({ d }: { d: Deltas }) {
   );
 }
 
-function CompareModal({ versions, a, b, onPick, onClose }: { versions: Version[]; a: Version; b: Version; onPick: (k: 'a' | 'b', id: string) => void; onClose: () => void }) {
+function CompareModal({ versions, a, b, models, onPick, onClose }: { versions: Version[]; a: Version; b: Version; models?: Project['models']; onPick: (k: 'a' | 'b', id: string) => void; onClose: () => void }) {
   const rows = compare(a.metrics, b.metrics);
   const evA = useMemo(() => evaluate(a.spec, 2), [a]);
   const evB = useMemo(() => evaluate(b.spec, 2), [b]);
@@ -143,7 +143,7 @@ function CompareModal({ versions, a, b, onPick, onClose }: { versions: Version[]
                   </option>
                 ))}
               </select>
-              <Scene spec={v.spec} routes={ev.ok ? ev.routes : null} layers={layers} interactive={false} animate={false} />
+              <Scene spec={v.spec} routes={ev.ok ? ev.routes : null} layers={layers} models={models} interactive={false} animate={false} />
             </div>
           ))}
         </div>
@@ -383,6 +383,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           spec={shown}
           routes={!preview && evaluation.ok ? evaluation.routes : null}
           layers={layers}
+          models={project.models}
           badIds={previewErrors.flatMap((e) => e.ids)}
           bottleneck={hot ? sim.bottleneck.name : undefined}
           selectedId={selected}
@@ -718,7 +719,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
         </form>
       </div>
 
-      {cmp && cmpA && cmpB && <CompareModal versions={versions} a={cmpA} b={cmpB} onPick={(k, id) => setCmp({ ...cmp, [k]: id })} onClose={() => setCmp(null)} />}
+      {cmp && cmpA && cmpB && <CompareModal versions={versions} a={cmpA} b={cmpB} models={project.models} onPick={(k, id) => setCmp({ ...cmp, [k]: id })} onClose={() => setCmp(null)} />}
     </div>
   );
 }

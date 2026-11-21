@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { Routes } from '../engines/route';
 import { dockPoint, footprint, snap, type FactorySpec, type Point, type Station } from '../spec';
+import type { MachineModel } from '../model3d';
 import { BONE, Equipment, INK, ORANGE } from './Equipment';
+import { StudioEnv } from './ModelMesh';
 
 export interface Layers {
   flow: boolean;
@@ -18,6 +20,8 @@ export interface SceneProps {
   spec: FactorySpec;
   routes: Routes | null;
   layers: Layers;
+  /** agent-built models by catalog id */
+  models?: Record<string, MachineModel>;
   badIds?: string[];
   bottleneck?: string;
   selectedId?: string | null;
@@ -67,7 +71,7 @@ function Floor({ spec }: { spec: FactorySpec }) {
     <group>
       <mesh position={[0, -0.2, 0]} receiveShadow>
         <boxGeometry args={[width + 0.5, 0.4, depth + 0.5]} />
-        <meshStandardMaterial color="#fffaf0" roughness={1} />
+        <meshStandardMaterial color="#f7efe0" roughness={1} envMapIntensity={0.2} />
       </mesh>
       <mesh position={[0, -0.47, 0]}>
         <boxGeometry args={[width + 0.5, 0.14, depth + 0.5]} />
@@ -88,6 +92,8 @@ function StationNode({
   selected,
   showLabel,
   label,
+  model,
+  animate,
   interactive,
   onSelect,
   onDrag,
@@ -100,6 +106,8 @@ function StationNode({
   selected: boolean;
   showLabel: boolean;
   label: string;
+  model?: MachineModel;
+  animate: boolean;
   interactive: boolean;
   onSelect?: SceneProps['onSelect'];
   onDrag?: SceneProps['onDrag'];
@@ -107,7 +115,7 @@ function StationNode({
 }) {
   const toWorld = useToWorld(spec);
   const f = footprint(s);
-  const h = s.recipe?.size.h ?? s.height ?? (s.type === 'storage' ? 2.2 : 1);
+  const h = model?.size.h ?? s.recipe?.size.h ?? s.height ?? (s.type === 'storage' ? 2.2 : 1);
   const [hover, setHover] = useState(false);
   const controls = useThree((st) => st.controls) as { enabled: boolean } | null;
   const grab = useRef<{ dx: number; dy: number; moved: boolean } | null>(null);
@@ -163,7 +171,7 @@ function StationNode({
         </mesh>
       )}
       <group rotation={[0, rotated ? Math.PI / 2 : 0, 0]}>
-        <Equipment type={s.type} shape={s.shape} recipe={s.recipe} w={s.w} d={s.d} h={h} modelUrl={s.modelUrl} />
+        <Equipment type={s.type} shape={s.shape} recipe={s.recipe} model={model} w={s.w} d={s.d} h={h} modelUrl={s.modelUrl} animate={animate} />
       </group>
       {/* invisible grab box */}
       <mesh position={[0, h / 2, 0]} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerOver={() => interactive && setHover(true)} onPointerOut={() => setHover(false)}>
@@ -313,13 +321,14 @@ function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number
   return null;
 }
 
-function World({ spec, routes, layers, badIds = [], bottleneck, selectedId, interactive = true, insetRight = 0, animate = true, onSelect, onDrag, onDrop }: SceneProps) {
+function World({ spec, routes, layers, models, badIds = [], bottleneck, selectedId, interactive = true, insetRight = 0, animate = true, onSelect, onDrag, onDrop }: SceneProps) {
   const toWorld = useToWorld(spec);
   const tour = useTour(spec, routes);
   const span = Math.max(spec.floor.width, spec.floor.depth);
   return (
     <>
-      <ambientLight intensity={1.5} />
+      <StudioEnv intensity={0.35} />
+      <ambientLight intensity={1.0} />
       <directionalLight position={[-span * 0.4, span * 1.2, span * 0.5]} intensity={1.7} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0005}>
         <orthographicCamera attach="shadow-camera" args={[-span, span, span, -span, 0.1, span * 5]} />
       </directionalLight>
@@ -338,6 +347,8 @@ function World({ spec, routes, layers, badIds = [], bottleneck, selectedId, inte
           selected={selectedId === s.id}
           showLabel={layers.labels}
           label={labelFor(spec, s)}
+          model={s.catalogId ? models?.[s.catalogId] : undefined}
+          animate={animate}
           interactive={interactive}
           onSelect={onSelect}
           onDrag={onDrag}

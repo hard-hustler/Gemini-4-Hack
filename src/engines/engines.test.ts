@@ -173,3 +173,38 @@ describe('machine recipes', () => {
     expect(normaliseRecipe({ archetype: 'spaceship', features: [{ kind: 'lasers' }] }).archetype).toBe('machine');
   });
 });
+
+describe('free-form machine models', () => {
+  const part = (label: string, size: [number, number, number], at: [number, number, number], extra = {}) => ({ label, shape: 'box', size, at, rot: [0, 0, 0], material: 'steel', motion: 'none', ...extra });
+  const table = () => [
+    ...[-1, 1].flatMap((sx) => [-1, 1].map((sz) => part(`leg ${sx} ${sz}`, [0.05, 0.8, 0.05], [sx * 0.55, 0.4, sz * 0.25]))),
+    part('top', [1.2, 0.05, 0.6], [0, 0.825, 0]),
+    ...Array.from({ length: 10 }, (_, i) => part(`box ${i}`, [0.08, 0.08, 0.08], [-0.5 + i * 0.1, 0.89, 0])),
+  ];
+  it('accepts a connected model and rejects a floating part, naming it', async () => {
+    const { checkModel, normaliseModel } = await import('../model3d');
+    const good = normaliseModel({ name: 'table', size: { w: 1.2, d: 0.6, h: 0.93 }, parts: table() }, { w: 1, d: 1, h: 1 });
+    expect(checkModel(good)).toEqual([]);
+    const bad = normaliseModel({ name: 'table', size: { w: 1.2, d: 0.6, h: 0.93 }, parts: [...table().slice(0, -1), part('lamp', [0.08, 0.08, 0.08], [0, 0.89, 0.6])] }, { w: 1, d: 1, h: 1 });
+    const errs = checkModel(bad);
+    expect(errs.some((e) => e.includes('float') && e.includes('"lamp"'))).toBe(true);
+  });
+  it('rejects a model that does not fit its envelope or has too few parts', async () => {
+    const { checkModel, normaliseModel } = await import('../model3d');
+    const m = normaliseModel({ name: 'x', size: { w: 3, d: 0.6, h: 0.93 }, parts: table().slice(0, 6) }, { w: 1, d: 1, h: 1 });
+    const errs = checkModel(m);
+    expect(errs.some((e) => e.includes('only 6 parts'))).toBe(true);
+    expect(errs.some((e) => e.includes('width (x)'))).toBe(true);
+  });
+  it('fitModel stands the model on the floor, centred, at exactly its stated size', async () => {
+    const { fitModel, modelBox, normaliseModel } = await import('../model3d');
+    const shifted = table().map((p) => ({ ...p, at: [p.at[0] + 0.3, p.at[1] + 0.02, p.at[2] - 0.1] }));
+    const fitted = fitModel(normaliseModel({ name: 't', size: { w: 1.3, d: 0.65, h: 1 }, parts: shifted }, { w: 1, d: 1, h: 1 }));
+    const b = modelBox(fitted.parts);
+    expect(b.min[1]).toBeCloseTo(0, 2);
+    expect(b.max[0] - b.min[0]).toBeCloseTo(1.3, 2);
+    expect(b.max[1] - b.min[1]).toBeCloseTo(1, 2);
+    expect(b.max[2] - b.min[2]).toBeCloseTo(0.65, 2);
+    expect((b.min[0] + b.max[0]) / 2).toBeCloseTo(0, 2);
+  });
+});

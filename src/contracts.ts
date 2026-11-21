@@ -5,6 +5,7 @@
 // Everything that crosses a boundary is one of these types. Change them here, nowhere else.
 
 import type { FeatureKind, MachineRecipe } from './machines';
+import type { MachineModel } from './model3d';
 import type { Wall } from './spec';
 
 /** One buyable or built-in piece of equipment. The catalog team owns the look (modelUrl, colour). */
@@ -25,6 +26,10 @@ export interface CatalogItem {
   listing?: ShopListing;
   /** GLB produced by the listing -> 3D converter; the scene falls back to a procedural model without it */
   modelUrl?: string;
+  /** a free-form detailed model designed by a sculptor agent; drawn in preference to the recipe */
+  model?: MachineModel;
+  /** how the model fared in inspection */
+  modelChecks?: ModelChecks;
   /** how the machine is built: an archetype plus features. The scene draws this. */
   recipe?: MachineRecipe;
   /** how the recipe was arrived at, when it was read from a listing */
@@ -33,6 +38,22 @@ export interface CatalogItem {
   shape?: 'bench' | 'rack' | 'machine' | 'table' | 'conveyor';
   /** 0..1 from the Decisions API when specs were read off a listing */
   confidence?: number;
+}
+
+/** Provenance of an agent-built model: what the inspector made of its render. */
+export interface ModelChecks {
+  /** 0..1 Decisions API: how well the render represents the listing photo */
+  likeness: number;
+  coherent: number;
+  proportions: number;
+  accepted: boolean;
+  /** render-inspect-correct rounds taken */
+  rounds: number;
+  parts: number;
+  sawPhoto: boolean;
+  dimsStated: boolean;
+  /** how well the listing suits the step, from the scout's ranking */
+  fit: number;
 }
 
 /** Provenance of a recipe read from a listing: what the independent check made of it. */

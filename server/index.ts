@@ -8,6 +8,7 @@ import { improveToGoal, type Goal } from './improve';
 import { optimise } from './optimize';
 import { layoutProject, planProject } from './harness';
 import { convertListing } from './recipes';
+import { design, inspect, revise, scout, type StepBrief } from './sculpt';
 import { priceEquipment, searchListings } from './shop';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 
@@ -176,6 +177,20 @@ app.post(
     if (!listing || !step) throw new Error('listing and step are required');
     return convertListing(listing, step, emit);
   }),
+);
+
+// ---- Sculptor agents: scout a listing, model it in detail, inspect the render, correct ----
+app.post('/api/agent/scout', streamed<{ step: StepBrief }>(({ step }, emit) => scout(step, emit)));
+app.post('/api/agent/design', streamed<{ listing: Parameters<typeof design>[0]; step: StepBrief }>(({ listing, step }, emit) => design(listing, step, emit)));
+app.post(
+  '/api/agent/inspect',
+  streamed<{ listing: Parameters<typeof inspect>[0]; model: Parameters<typeof inspect>[1]; render: string }>(({ listing, model, render }, emit) => inspect(listing, model, render, emit)),
+);
+app.post(
+  '/api/agent/revise',
+  streamed<{ listing: Parameters<typeof revise>[0]; step: StepBrief; model: Parameters<typeof revise>[2]; render: string; problems: string[] }>(({ listing, step, model, render, problems }, emit) =>
+    revise(listing, step, model, render, problems, emit),
+  ),
 );
 
 const port = Number(process.env.PORT ?? 8787);

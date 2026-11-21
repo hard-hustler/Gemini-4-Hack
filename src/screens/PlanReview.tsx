@@ -7,6 +7,7 @@ import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
 import { Icon } from '../ui/icons';
 import { featureText } from '../machines';
 import { MachineThumb } from '../ui/thumbs';
+import { Swarm } from './Swarm';
 
 const WALL = { N: 'north', S: 'south', E: 'east', W: 'west' } as const;
 
@@ -115,6 +116,7 @@ export function PlanReview({
   onOpenSim?: () => void;
 }) {
   const [replacing, setReplacing] = useState<number | null>(null);
+  const [swarm, setSwarm] = useState<'open' | 'hidden' | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const run = useRun();
   const req = project.requirements;
@@ -195,10 +197,17 @@ export function PlanReview({
 
         <div className="plan-grid">
           <section>
-            <h2>Equipment</h2>
-            <p className="muted" style={{ marginBottom: 12 }}>
-              {stations} stations in process order, {money(total)} in total.
-            </p>
+            <div className="section-head">
+              <div>
+                <h2>Equipment</h2>
+                <p className="muted">
+                  {stations} stations in process order, {money(total)} in total.
+                </p>
+              </div>
+              <button className="ghost" onClick={() => setSwarm('open')} disabled={run.busy || stations === 0}>
+                {swarm === 'hidden' ? 'Show the swarm' : 'Source real equipment'}
+              </button>
+            </div>
             <div className="equipment">
               {lines.map((l, i) => (
                 <article key={l.stepType} className={`equip${l.qty === 0 ? ' off' : ''}`}>
@@ -213,6 +222,12 @@ export function PlanReview({
                       {l.item.needsWater ? ' · needs water' : ''}
                       {l.item.source === 'shopify' ? ` · from ${l.item.listing?.seller ?? 'Shop'}` : ''}
                     </span>
+                    {l.item.model && l.item.modelChecks && (
+                      <span className="muted small">
+                        Modelled from the listing{l.item.modelChecks.sawPhoto ? ' photo' : ' text'} in {l.item.modelChecks.parts} parts. The inspector rates the likeness {pct(l.item.modelChecks.likeness)}
+                        {l.item.modelChecks.rounds > 1 ? ` after ${l.item.modelChecks.rounds} rounds` : ''}.{!l.item.modelChecks.dimsStated ? ' Size is estimated; the listing does not state it.' : ''}
+                      </span>
+                    )}
                     {l.item.source === 'shopify' && l.item.recipe && (
                       <span className="muted small">
                         Built from the listing{l.item.recipeChecks?.sawPhoto ? ' photo' : ' text'} as a {l.item.recipe.archetype}
@@ -288,6 +303,21 @@ export function PlanReview({
           {project.versions.length ? 'Lay it out again' : 'Lay it out and simulate'} <Icon name="arrowRight" />
         </button>
       </footer>
+
+      {swarm && (
+        <div style={swarm === 'hidden' ? { display: 'none' } : undefined}>
+          <Swarm
+            lines={lines}
+            onClose={() => setSwarm((cur) => (cur === 'open' ? 'hidden' : null))}
+            onApply={(items, events) => {
+              const models = { ...(project.models ?? {}) };
+              for (const item of Object.values(items)) if (item.model) models[item.id] = item.model;
+              onChange({ equipment: lines.map((l) => (items[l.stepType] ? { ...l, item: items[l.stepType] } : l)), models, trace: [...project.trace, ...events] });
+              setSwarm(null);
+            }}
+          />
+        </div>
+      )}
 
       {replacing !== null && (
         <Replace

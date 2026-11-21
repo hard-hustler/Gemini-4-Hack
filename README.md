@@ -70,6 +70,29 @@ with the photo read and every kept feature confirmed by the Decisions API. The
 why, and whether the size was stated or estimated. The Catalog screen shows
 every built-in machine and every archetype.
 
+## Sculptor swarm: detailed models from real listings
+
+"Source real equipment" on the Equipment screen starts one agent per process
+step, all at once (`src/screens/Swarm.tsx`, `server/sculpt.ts`). Each agent:
+
+1. **Scouts** Shop for the step, has the Decisions API rank the listings for
+   suitability, and widens the search until one fits well.
+2. **Models** the product from its photo as a free-form part list
+   (`src/model3d.ts`): boxes, cylinders, cones, spheres and rings, 35 real
+   materials (painted metal, steel, chrome, glass, lit screens, hazard
+   striping) and moving parts. No archetypes.
+3. **Is checked in code**: the parts must fill and fit the stated envelope and
+   every part must reach the floor through parts that touch. Failures go back
+   to the modeller with the offending parts named.
+4. **Is rendered** in the browser, and the Decisions API compares the render
+   with the listing photo (likeness, coherence, proportions).
+5. **Is corrected** when it falls short: an inspector lists concrete problems
+   and the modeller revises, up to three rounds. The best version is kept.
+
+In testing, five agents built five models of 19 to 57 parts in 32 to 58 s, at
+77 to 84% likeness. The recipe catalog above remains for built-in machines
+and as the look for anything without a model.
+
 ## Seams for the other workstreams
 
 All shared types are in `src/contracts.ts`.
@@ -144,6 +167,8 @@ Where it breaks, and what the numbers do not show:
   checked against walls.
 - Recipes carry an operator side, but the placer does not use it yet, and
   there are no material in/out points or utility connection points.
-- A recipe can only describe what the 12 archetypes and their features cover;
-  anything else becomes the nearest archetype.
+- Built-in machines are still recipes (12 archetypes). Only machines sourced
+  by the swarm get free-form models.
+- The scout is limited by what Shop lists: for "test" it found a plain table.
+- Likeness is judged from one render angle.
 - A real GLB has still not been loaded through `modelUrl`.
