@@ -3,6 +3,7 @@
 
 import { compare, evaluate, type Metrics } from '../src/engines/versions';
 import { route } from '../src/engines/route';
+import { objective } from '../src/engines/search';
 import { validate } from '../src/engines/validate';
 import { applyOps, type EditOp, type FactorySpec } from '../src/spec';
 import { decide, interact, MODELS, type Question, type Step } from './gemini';
@@ -43,15 +44,6 @@ export interface Candidate {
   /** lower is better; base is 1.0 */
   score?: number;
   deltas?: { uph: number; leadMin: number; costPerUnit: number; buildCost: number; forkliftM: number };
-}
-
-/** One scalar to rank by: lead time and running cost relative to base, with a penalty for losing throughput. */
-function objective(base: Metrics, m: Metrics): number {
-  const lead = m.sim.leadTimeSec.median / base.sim.leadTimeSec.median;
-  const unit = m.cost.costPerUnit / base.cost.costPerUnit;
-  const build = m.cost.buildCost / base.cost.buildCost;
-  const lost = Math.max(0, 1 - m.sim.unitsPerHour.median / base.sim.unitsPerHour.median);
-  return 0.5 * lead + 0.35 * unit + 0.15 * build + 3 * lost;
 }
 
 function situation(spec: FactorySpec, m: Metrics): string {

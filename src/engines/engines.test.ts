@@ -112,3 +112,13 @@ describe('cost and versions', () => {
     expect(cost(workshop, a.metrics.sim, r).buildCost).toBeGreaterThan(4150);
   });
 });
+
+describe('localSearch', () => {
+  it('improves the fixture, stays valid, and its ops reproduce the result', async () => {
+    const { localSearch } = await import('./search');
+    const r = localSearch(workshop, { iters: 150, seed: 2 });
+    expect(r.score).toBeLessThan(1);
+    expect(validate(r.spec)).toEqual([]);
+    expect(applyOps(workshop, r.ops)).toEqual(r.spec);
+  });
+});
