@@ -10,7 +10,10 @@ import { localSearch } from './search';
 import { mulberry32 } from './simulate';
 import { gapBetween, MIN_AISLE_M, validate, type ValidationError } from './validate';
 
-const CELL = 0.5;
+/** Grid step. Half a metre in a workshop; a metre on a plant floor, so 100+ stations stay quick to place and route. */
+let CELL = 0.5;
+const LARGE_FLOOR_M = 60;
+const LARGE_STATIONS = 40;
 const EPS = 1e-6;
 export const DEFAULT_COSTS: FactorySpec['costs'] = { labourPerHour: 28, electricityPerKwh: 0.16, powerRunPerM: 45, waterRunPerM: 70 };
 
@@ -52,6 +55,7 @@ function stationsFrom(req: Requirements, equipment: EquipmentLine[]): Station[] 
         powerKw: it.powerKw,
         needsWater: it.needsWater,
         price: it.price,
+        zone: step.zone,
         name: it.name,
         catalogId: it.id,
         height: it.recipe?.size.h ?? it.footprint.h,
@@ -80,12 +84,23 @@ function clear(r: Rect, placed: Rect[], width: number, depth: number): boolean {
   return true;
 }
 
+const spirals = new Map<number, [number, number][]>();
+/** Grid offsets out to `reach` cells, nearest first. */
+function spiral(reach: number): [number, number][] {
+  let offsets = spirals.get(reach);
+  if (!offsets) {
+    offsets = [];
+    for (let dx = -reach; dx <= reach; dx++) for (let dy = -reach; dy <= reach; dy++) offsets.push([dx, dy]);
+    offsets.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
+    spirals.set(reach, offsets);
+  }
+  return offsets;
+}
+
 /** Move each station to the nearest spot to where it wants to be that is legal against those already placed. */
 function legalise(stations: Station[], want: Point[], width: number, depth: number): Station[] | null {
-  const reach = Math.ceil(Math.max(width, depth) / CELL);
-  const offsets: [number, number][] = [];
-  for (let dx = -reach; dx <= reach; dx++) for (let dy = -reach; dy <= reach; dy++) offsets.push([dx, dy]);
-  offsets.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
+  const reach = Math.min(48, Math.ceil(Math.max(width, depth) / CELL));
+  const offsets = spiral(reach);
   const placed: Rect[] = [];
   const out: Station[] = [];
   for (let i = 0; i < stations.length; i++) {
@@ -123,6 +138,9 @@ interface RowStyle {
 
 /** Stations in process order along a serpentine: row one runs one way, row two comes back (a U for two rows). */
 function serpentine(stations: Station[], width: number, depth: number, st: RowStyle): Point[] | null {
+  // gaps and aisles are rounded up to the grid, so snapping can never shrink one below the minimum
+  const up = (v: number) => (v > 0 ? Math.ceil(v / CELL - EPS) * CELL : 0);
+  st = { ...st, margin: up(st.margin), gap: up(st.gap), aisle: up(st.aisle) };
   const usable = width - 2 * st.margin;
   const gapAfter = (row: Station[], i: number) => (i === row.length - 1 ? 0 : st.bank && row[i].type === row[i + 1].type ? 0 : st.gap);
   const rowW = (row: Station[]) => row.reduce((t, s, i) => t + s.w + gapAfter(row, i), 0);
@@ -209,6 +227,9 @@ function finish(base: FactorySpec, stations: Station[], req: Requirements): Fact
 
 /** Requirements + equipment -> a validated layout, or a PlaceError that says exactly why not. */
 export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts: { polish?: boolean } = {}): PlaceResult {
+  const count = equipment.reduce((t, l) => t + Math.max(0, l.qty), 0);
+  const large = Math.max(req.floor.width, req.floor.depth) > LARGE_FLOOR_M || count > LARGE_STATIONS;
+  CELL = large ? 1 : 0.5;
   const width = Math.max(4, snap(req.floor.width, CELL));
   const depth = Math.max(4, snap(req.floor.depth, CELL));
   const stations = stationsFrom(req, equipment);
@@ -223,6 +244,7 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
     routing: req.steps.map((s) => s.type).filter((t, i, a) => present.has(t) && a.indexOf(t) === i),
     demandPerHour: Math.max(1, req.demandPerHour),
     forklifts: 1,
+    transport: req.transport ?? (large ? 'conveyor' : 'forklift'),
     costs: DEFAULT_COSTS,
   };
 
@@ -230,6 +252,20 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
   if (area > width * depth * 0.6) {
     throw new PlaceError(`Equipment covers ${area.toFixed(0)} m² of a ${(width * depth).toFixed(0)} m² floor; there is no room left for aisles`);
   }
+
+  // How far a unit travels. Routed exactly on a workshop floor; on a plant, the straight-line
+  // distance between each step's centre and the next is a close and far cheaper stand-in.
+  const tourLength = (spec: FactorySpec): number => {
+    if (!large) return route(spec).totals.forkliftM;
+    const centreOf = (type: string) => {
+      const list = spec.stations.filter((s) => s.type === type);
+      return { x: list.reduce((t, s) => t + s.x + footprint(s).w / 2, 0) / list.length, y: list.reduce((t, s) => t + s.y + footprint(s).d / 2, 0) / list.length };
+    };
+    const stops = [dockPoint(spec, spec.docks[0]), ...spec.routing.map(centreOf), dockPoint(spec, spec.docks[1] ?? spec.docks[0])];
+    let len = 0;
+    for (let i = 1; i < stops.length; i++) len += Math.abs(stops[i].x - stops[i - 1].x) + Math.abs(stops[i].y - stops[i - 1].y);
+    return len;
+  };
 
   let best: { spec: FactorySpec; len: number } | null = null;
   let lastErrors: ValidationError[] = [];
@@ -245,7 +281,7 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
       lastErrors = errs;
       return;
     }
-    const len = route(spec).totals.forkliftM;
+    const len = tourLength(spec);
     if (!best || len < best.len) best = { spec, len };
   };
 
@@ -264,7 +300,7 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
       lastErrors = errs;
       return;
     }
-    const len = route(spec).totals.forkliftM;
+    const len = tourLength(spec);
     if (!best || len < best.len) best = { spec, len };
   };
 
@@ -325,7 +361,7 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
     );
   }
   const start = (best as { spec: FactorySpec }).spec;
-  if (opts.polish === false) return { spec: start, method: 'flow line', polished: false, polishScore: 1, variantsTried: tried };
+  if (opts.polish === false || large) return { spec: start, method: 'flow line', polished: false, polishScore: 1, variantsTried: tried };
 
   // 4. Polish with the seeded search; dock walls stay where the brief put them.
   let polished = start;

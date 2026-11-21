@@ -18,6 +18,8 @@ export interface LineModel {
   /** 'exp' is used to check the sim against queueing theory; 'uniform' is +/-25% around the cycle time */
   service: 'exp' | 'uniform';
   transport: boolean;
+  /** conveyors move every unit at once: travel time but no queue for a carrier */
+  conveyor?: boolean;
 }
 
 export interface SimOptions {
@@ -58,6 +60,7 @@ export interface SimResult {
 
 export const FORKLIFT_SPEED_MPS = 1.5;
 export const HANDLING_SEC = 8;
+export const CONVEYOR_SPEED_MPS = 0.4;
 
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -84,6 +87,7 @@ export function buildModel(spec: FactorySpec, opts: SimOptions = {}): LineModel 
     handlingSec: HANDLING_SEC,
     service: opts.service ?? 'uniform',
     transport: opts.transport ?? true,
+    conveyor: spec.transport === 'conveyor',
   };
 }
 
@@ -169,6 +173,8 @@ export function simulateOnce(model: LineModel, seed: number, hours = 8, warmupHo
   const requestMove = (t: number, job: number, leg: number) => {
     if (!model.transport) {
       heap.push({ t, kind: 'moved', job, leg, usedFork: false });
+    } else if (model.conveyor) {
+      heap.push({ t: t + model.legs[leg] / CONVEYOR_SPEED_MPS, kind: 'moved', job, leg, usedFork: false });
     } else if (forkFree > 0) {
       forkFree--;
       startMove(t, job, leg);
@@ -228,7 +234,7 @@ export function simulateOnce(model: LineModel, seed: number, hours = 8, warmupHo
   model.stages.forEach((s, i) => {
     utilisation[s.name] = s.servers.length ? stageBusy[i] / (s.servers.length * windowSec) : 0;
   });
-  if (model.transport) utilisation.forklift = forkBusy / (model.forklifts * windowSec);
+  if (model.transport && !model.conveyor) utilisation.forklift = forkBusy / (model.forklifts * windowSec);
 
   return {
     unitsPerHour: done / hours,

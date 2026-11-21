@@ -62,6 +62,8 @@ export interface InteractOptions {
   schema?: object;
   thinking?: 'low' | 'medium' | 'high' | 'xhigh';
   maxOutputTokens?: number;
+  /** built-in tools, e.g. [{ type: 'google_search' }] */
+  tools?: object[];
 }
 
 export interface InteractResult<T = unknown> {
@@ -69,6 +71,10 @@ export interface InteractResult<T = unknown> {
   json: T;
   usage: Record<string, unknown>;
   ms: number;
+  /** pages a search-grounded answer cites */
+  sources: { url: string; title: string }[];
+  /** search queries the model ran */
+  queries: string[];
 }
 
 export async function interact<T = unknown>(o: InteractOptions): Promise<InteractResult<T>> {
@@ -80,6 +86,7 @@ export async function interact<T = unknown>(o: InteractOptions): Promise<Interac
   if (o.maxOutputTokens) gen.max_output_tokens = o.maxOutputTokens;
   if (Object.keys(gen).length) body.generation_config = gen;
   if (o.schema) body.response_format = { type: 'text', mime_type: 'application/json', schema: o.schema };
+  if (o.tools?.length) body.tools = o.tools;
 
   const res = await post('interactions', body);
   const text: string = (res.steps ?? [])
@@ -97,7 +104,13 @@ export async function interact<T = unknown>(o: InteractOptions): Promise<Interac
       throw new GeminiError(502, 'bad_json', `Model output was not valid JSON: ${text.slice(0, 200)}`);
     }
   }
-  return { text, json, usage: res.usage ?? {}, ms: Date.now() - started };
+  const sources = new Map<string, string>();
+  const queries: string[] = [];
+  for (const s of res.steps ?? []) {
+    if (s.type === 'google_search_call') for (const q of s.arguments?.queries ?? []) queries.push(String(q));
+    if (s.type === 'model_output') for (const c of s.content ?? []) for (const a of c.annotations ?? []) if (a.type === 'url_citation' && a.url) sources.set(String(a.url), String(a.title ?? a.url));
+  }
+  return { text, json, usage: res.usage ?? {}, ms: Date.now() - started, sources: [...sources].map(([url, title]) => ({ url, title })), queries };
 }
 
 export type Question =

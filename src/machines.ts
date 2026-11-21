@@ -519,7 +519,7 @@ export function partsBounds(parts: Part[]) {
 const f = (...kinds: FeatureKind[]) => kinds.map((kind) => ({ kind, count: kind === 'drawers' ? 2 : 1 }));
 
 /** The house recipe for a step type, used for built-in catalog items and anything without a recipe of its own. */
-export function defaultRecipe(type: string, size: { w: number; d: number; h: number }, shape?: string): MachineRecipe {
+export function defaultRecipe(type: string, size: { w: number; d: number; h: number }, shape?: string, hint?: string): MachineRecipe {
   const base = (archetype: Archetype, features: MachineRecipe['features'], colors: Partial<MachineRecipe['colors']> = {}, extra: Partial<MachineRecipe> = {}): MachineRecipe => {
     const r: MachineRecipe = { archetype, size: { ...size }, colors: { frame: 'ink', surface: 'wood', body: 'bone', accent: 'orange', ...colors }, features, operatorSide: 'front', ...extra };
     return repairRecipe(r).recipe;
@@ -549,8 +549,21 @@ export function defaultRecipe(type: string, size: { w: number; d: number; h: num
     case 'conveyor':
       return base('conveyor', f('rollers', 'sideGuards'), { body: 'steel', accent: 'blue' });
     default: {
-      const archetype: Archetype = shape === 'rack' ? 'rack' : shape === 'bench' ? 'bench' : shape === 'table' ? 'table' : shape === 'conveyor' ? 'conveyor' : 'machine';
-      return base(archetype, archetype === 'machine' ? f('controlPanel', 'stackLight') : [], {}, archetype === 'machine' ? { size: { ...size, h: Math.max(size.h, 1.2) } } : {});
+      // Unknown step: read the name. A plant's steps are named for what they do.
+      const words = `${type} ${hint ?? ''}`.toLowerCase();
+      const has = (...keys: string[]) => keys.some((k) => words.includes(k));
+      const tall = (min: number) => ({ size: { ...size, h: Math.max(size.h, min) } });
+      if (shape === 'rack' || has('storage', 'rack', 'warehouse', 'buffer', 'inventory')) return base('rack', f('boxes'), { frame: 'blue', accent: 'orange' }, tall(2.4));
+      if (has('conveyor', 'transfer', 'line feed')) return base('conveyor', f('rollers', 'sideGuards'), { body: 'steel', accent: 'blue' });
+      if (has('weld', 'robot', 'framing', 'respot', 'handling', 'palletis', 'pick')) return base('robot', f('gripper', 'guard', 'controlPanel'), { body: 'orange', accent: 'ink' }, tall(2));
+      if (has('paint', 'coat', 'booth', 'oven', 'cure', 'dry', 'spray', 'primer', 'sealer', 'blast')) return base('enclosure', f('duct', 'lamp', 'window', 'controlPanel'), { body: 'bone', accent: 'blue' }, tall(2.6));
+      if (has('press', 'stamp', 'blank', 'punch', 'forge', 'mold', 'mould', 'cast', 'drill')) return base('press', f('handwheel', 'guard', 'controlPanel'), { frame: 'green', body: 'green', accent: 'yellow' }, tall(2.4));
+      if (has('tank', 'treat', 'wash', 'dip', 'fluid', 'fill', 'mix', 'rinse', 'plating')) return base('tank', f('lid', 'pipe', 'gauge'), { body: 'steel', accent: 'blue' }, tall(2));
+      if (has('inspect', 'test', 'quality', 'measure', 'scan', 'audit', 'end of line', 'endofline', 'dyno', 'label')) return base('kiosk', f('monitor', 'controlPanel', 'stackLight'), { accent: 'red', surface: 'steel' }, tall(1.5));
+      if (has('pack', 'ship', 'dispatch', 'kitting', 'kit')) return base('table', f('boxes', 'lowerShelf'), { surface: 'bone' }, { workHeight: 0.9 });
+      if (shape === 'bench' || has('assembl', 'trim', 'install', 'fit', 'marriage', 'chassis', 'wheel', 'interior', 'door', 'engine', 'sub')) return base('bench', f('backboard', 'overShelf', 'bins', 'lamp', 'powerStrip'), { accent: 'orange' }, { size: { ...size, h: Math.max(size.h, 1.6) }, workHeight: 0.9 });
+      const archetype: Archetype = shape === 'table' ? 'table' : shape === 'conveyor' ? 'conveyor' : 'machine';
+      return base(archetype, archetype === 'machine' ? f('controlPanel', 'stackLight', 'window') : [], {}, archetype === 'machine' ? { size: { ...size, h: Math.max(size.h, 1.6) } } : {});
     }
   }
 }

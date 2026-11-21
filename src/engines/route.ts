@@ -24,7 +24,8 @@ export interface Routes {
   missing: { from: string; to: string }[];
   power: UtilityRun[];
   water: UtilityRun[];
-  totals: { forkliftM: number; powerM: number; waterM: number };
+  /** forkliftM is the mean distance one unit travels; pathM is the length of every drawn path (what conveyor would cost) */
+  totals: { forkliftM: number; powerM: number; waterM: number; pathM: number };
 }
 
 interface Node {
@@ -91,19 +92,26 @@ export function route(spec: FactorySpec): Routes {
 
   for (let leg = 0; leg < stages.length - 1; leg++) {
     const lens: number[] = [];
-    for (const a of stages[leg]) {
-      for (const b of stages[leg + 1]) {
-        const cells = astar(grid, a.cells, b.cells);
-        if (!cells) {
-          missing.push({ from: a.name, to: b.name });
-          continue;
-        }
-        const points = simplify(cells.map((c) => cellCentre(grid, c.c, c.r)));
-        const length = pathLength(points);
-        lens.push(length);
-        forklift.push({ from: a.name, to: b.name, leg, points, length });
-      }
-    }
+    const next = stages[leg + 1];
+    const goals = next.flatMap((b) => b.cells);
+    const owner = new Map<number, string>();
+    for (const b of next) for (const c of b.cells) owner.set(c.r * grid.cols + c.c, b.name);
+    const served = new Set<string>();
+    const run = (from: Node, to: Cell[], name?: string) => {
+      const cells = astar(grid, from.cells, to);
+      if (!cells) return void missing.push({ from: from.name, to: name ?? next[0]?.name ?? 'next step' });
+      const end = cells[cells.length - 1];
+      const target = name ?? owner.get(end.r * grid.cols + end.c) ?? next[0].name;
+      served.add(target);
+      const points = simplify(cells.map((c) => cellCentre(grid, c.c, c.r)));
+      const length = pathLength(points);
+      lens.push(length);
+      forklift.push({ from: from.name, to: target, leg, points, length });
+    };
+    // One path per source, to whichever station of the next step is nearest: this is what
+    // keeps a 100-station plant routable. Then any station nobody feeds gets a path of its own.
+    for (const a of stages[leg]) run(a, goals);
+    for (const b of next) if (!served.has(b.name) && stages[leg][0]) run(stages[leg][0], b.cells, b.name);
     legLengths.push(lens.length ? lens.reduce((x, y) => x + y, 0) / lens.length : 0);
   }
 
@@ -117,7 +125,7 @@ export function route(spec: FactorySpec): Routes {
     missing,
     power,
     water,
-    totals: { forkliftM: legLengths.reduce((a, b) => a + b, 0), powerM: sum(power), waterM: sum(water) },
+    totals: { forkliftM: legLengths.reduce((a, b) => a + b, 0), powerM: sum(power), waterM: sum(water), pathM: sum(forklift) },
   };
 }
 

@@ -129,11 +129,12 @@ export function validate(spec: FactorySpec): ValidationError[] {
     const c = centre(s);
     const pRun = Math.abs(c.x - power.x) + Math.abs(c.y - power.y);
     const wRun = Math.abs(c.x - water.x) + Math.abs(c.y - water.y);
-    if (s.powerKw > 0 && pRun > MAX_UTILITY_RUN_M) {
-      errors.push({ code: 'power', message: `${s.id} is ${pRun.toFixed(1)} m from the power entry; max run is ${MAX_UTILITY_RUN_M} m`, ids: [s.id] });
+    const maxRun = Math.max(MAX_UTILITY_RUN_M, width + depth);
+    if (s.powerKw > 0 && pRun > maxRun) {
+      errors.push({ code: 'power', message: `${s.id} is ${pRun.toFixed(1)} m from the power entry; max run is ${maxRun} m`, ids: [s.id] });
     }
-    if (s.needsWater && wRun > MAX_UTILITY_RUN_M) {
-      errors.push({ code: 'water', message: `${s.id} is ${wRun.toFixed(1)} m from the water entry; max run is ${MAX_UTILITY_RUN_M} m`, ids: [s.id] });
+    if (s.needsWater && wRun > maxRun) {
+      errors.push({ code: 'water', message: `${s.id} is ${wRun.toFixed(1)} m from the water entry; max run is ${maxRun} m`, ids: [s.id] });
     }
   }
   return errors;

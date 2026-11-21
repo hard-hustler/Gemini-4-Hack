@@ -105,7 +105,10 @@ export function astar(g: Grid, starts: Cell[], goals: Cell[]): Cell[] | null {
   if (!starts.length || !goals.length) return null;
   const n = g.cols * g.rows;
   const goalSet = new Set(goals.map((c) => idx(g, c.c, c.r)));
+  // with hundreds of goal cells the heuristic costs more than it saves: fall back to Dijkstra
+  const manyGoals = goals.length > 24;
   const h = (c: number, r: number) => {
+    if (manyGoals) return 0;
     let best = Infinity;
     for (const gl of goals) best = Math.min(best, Math.abs(gl.c - c) + Math.abs(gl.r - r));
     return best;

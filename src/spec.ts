@@ -33,6 +33,8 @@ export interface Station {
   powerKw: number;
   needsWater: boolean;
   price: number;
+  /** the department this station belongs to, on large plants */
+  zone?: string;
   /** display and catalog fields: ignored by the engines */
   name?: string;
   catalogId?: string;
@@ -55,11 +57,15 @@ export interface FactorySpec {
   routing: string[];
   demandPerHour: number;
   forklifts?: number;
+  /** how units move between steps. Conveyors carry continuously; forklifts are a shared resource. */
+  transport?: 'forklift' | 'conveyor';
   costs: {
     labourPerHour: number;
     electricityPerKwh: number;
     powerRunPerM: number;
     waterRunPerM: number;
+    /** build cost of conveyor, per metre */
+    conveyorPerM?: number;
   };
 }
 

@@ -101,6 +101,8 @@ export interface ProcessStep {
   /** rough footprint in metres, used only when the catalog has nothing for this type */
   w: number;
   d: number;
+  /** the department this step belongs to, on plants with several */
+  zone?: string;
 }
 
 export interface Requirements {
@@ -113,6 +115,10 @@ export interface Requirements {
   dockOut: Wall;
   powerWall: Wall;
   waterWall: Wall;
+  /** conveyors on lines and plants, forklifts in workshops */
+  transport?: 'forklift' | 'conveyor';
+  /** what the research phase found, when one ran */
+  research?: { summary: string; sources: { url: string; title: string }[]; queries: string[] };
   /** only when the brief includes a drawing: where each drawn station sits, as fractions of the floor */
   sketch: { type: string; fx: number; fy: number }[];
   assumptions: string[];
@@ -130,7 +136,7 @@ export interface EquipmentLine {
 
 /** One thing the harness did. The UI shows these as the run tracker; they are also the audit log. */
 export interface TraceEvent {
-  stage: 'read' | 'plan' | 'check' | 'equip' | 'place' | 'simulate' | 'improve' | 'convert';
+  stage: 'read' | 'research' | 'plan' | 'check' | 'equip' | 'place' | 'simulate' | 'improve' | 'convert';
   actor: 'hydrogen' | 'neon' | 'decisions' | 'agent' | 'engine' | 'shop';
   title: string;
   detail?: string;
