@@ -180,7 +180,7 @@ export type AdvocateRole = 'stress' | 'safety' | 'cfo' | 'compliance' | 'mainten
 export type CharacterRole = AdvocateRole | 'fixer';
 export type AdvocateSeverity = 'blocker' | 'warning' | 'advisory';
 export type AdvocateVerdict = 'pass' | 'warn' | 'veto';
-export type AdvocateVoice = 'Fenrir' | 'Kore' | 'Charon' | 'Zephyr' | 'Puck';
+export type AdvocateVoice = 'Orus' | 'Pulcherrima' | 'Sadaltager' | 'Erinome' | 'Algenib' | 'Sulafat';
 
 export interface AdvocateCharacter {
   role: CharacterRole;

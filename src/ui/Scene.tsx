@@ -322,7 +322,47 @@ function Movers({ tour, carriers, hot }: { tour: Tour; carriers: number; hot: bo
   );
 }
 
-function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number }) {
+/** A camera pose on the orthographic rig: what it looks at, from which compass direction and height, and how close. */
+type CameraPose = { target: THREE.Vector3; azimuth: number; elevation: number; zoom: number };
+
+const HOME_AZIMUTH = Math.PI / 4; // the classic isometric corner, as before
+const HOME_ELEVATION = Math.atan2(50, Math.hypot(40, 40));
+const RIG_DISTANCE = 75;
+/**
+ * Speaker shots stay between -15° and 75°: floor labels run along +x, so they read left to right only from the
+ * +z side (azimuth within ±90°), and comfortably well inside that.
+ */
+const SHOT_CENTER = (30 * Math.PI) / 180;
+const MAX_SWING = (45 * Math.PI) / 180;
+/** how long the floor stays on a speaker after they stop, so a walkthrough does not bounce out between lines */
+const RETURN_DELAY_MS = 1400;
+
+/** Moves the target right on screen, so the subject sits in the part of the canvas the side panel does not cover. */
+function insetShift(azimuth: number, zoom: number, insetRight: number): THREE.Vector3 {
+  const right = new THREE.Vector3(Math.cos(azimuth), 0, -Math.sin(azimuth));
+  return right.multiplyScalar(insetRight / 2 / zoom);
+}
+
+function applyPose(camera: THREE.Camera, controls: unknown, pose: CameraPose) {
+  const { target, azimuth, elevation, zoom } = pose;
+  const flat = Math.cos(elevation) * RIG_DISTANCE;
+  camera.position.set(target.x + Math.sin(azimuth) * flat, target.y + Math.sin(elevation) * RIG_DISTANCE, target.z + Math.cos(azimuth) * flat);
+  const ortho = camera as THREE.OrthographicCamera;
+  ortho.zoom = zoom;
+  ortho.lookAt(target);
+  ortho.updateProjectionMatrix();
+  const c = controls as { target: THREE.Vector3; update: () => void } | null;
+  if (c) {
+    c.target.copy(target);
+    c.update();
+  }
+}
+
+/**
+ * Frames the floor, and during a floor review cuts to whoever is speaking: a close-up from the side they face,
+ * so each crew member gets their own angle. When nobody has spoken for a moment it eases back to the whole floor.
+ */
+function CameraDirector({ spec, insetRight, walkPlans, speakingRole }: { spec: FactorySpec; insetRight: number; walkPlans: CharacterWalkPlan[]; speakingRole?: CharacterRole | null }) {
   const { camera, size, controls } = useThree();
   const { width, depth } = spec.floor;
   // A workshop is framed by its room. A plant is framed by its equipment: the floor can be far
@@ -340,21 +380,89 @@ function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number
     const pad = 6;
     return { w: Math.min(width, maxX - minX + pad * 2), d: Math.min(depth, maxY - minY + pad * 2), cx: (minX + maxX) / 2 - width / 2, cz: (minY + maxY) / 2 - depth / 2 };
   }, [spec.stations, width, depth]);
-  useEffect(() => {
-    const free = Math.max(320, size.width - insetRight);
+
+  const free = Math.max(320, size.width - insetRight);
+  const home = useMemo((): CameraPose => {
     const zoom = Math.min(free / ((frame.w + frame.d) * 0.86), size.height / ((frame.w + frame.d) * 0.7));
-    const shift = insetRight / 2 / zoom / Math.SQRT2;
-    const target = new THREE.Vector3(frame.cx + shift, 0, frame.cz - shift);
-    camera.position.set(target.x + 40, 50, target.z + 40);
-    (camera as THREE.OrthographicCamera).zoom = zoom;
-    camera.lookAt(target);
-    camera.updateProjectionMatrix();
-    const c = controls as unknown as { target: THREE.Vector3; update: () => void } | null;
-    if (c) {
-      c.target.copy(target);
-      c.update();
+    const target = new THREE.Vector3(frame.cx, 0, frame.cz).add(insetShift(HOME_AZIMUTH, zoom, insetRight));
+    return { target, azimuth: HOME_AZIMUTH, elevation: HOME_ELEVATION, zoom };
+  }, [frame, free, size.height, insetRight]);
+
+  const plan = speakingRole ? walkPlans.find((w) => w.role === speakingRole) : undefined;
+  const shot = useMemo((): CameraPose | null => {
+    if (!plan) return null;
+    const stand = new THREE.Vector3(plan.standPoint.x - width / 2, 0, plan.standPoint.y - depth / 2);
+    const look = new THREE.Vector3(plan.lookAtPoint.x - width / 2, 0, plan.lookAtPoint.y - depth / 2);
+    const facing = look.clone().sub(stand);
+    // look from the side the speaker faces, so we see them and what they are pointing at, but stay on the
+    // readable side of the floor (see SHOT_CENTER)
+    let azimuth = HOME_AZIMUTH;
+    if (facing.lengthSq() > 0.01) {
+      let off = Math.atan2(facing.x, facing.z) - SHOT_CENTER;
+      off = Math.atan2(Math.sin(off), Math.cos(off));
+      // facing the far side of the floor: look from its mirror side instead, so each speaker still gets a distinct angle
+      if (Math.abs(off) > Math.PI / 2) off = Math.sign(off) * (Math.PI - Math.abs(off));
+      azimuth = SHOT_CENTER + Math.max(-MAX_SWING, Math.min(MAX_SWING, off));
     }
-  }, [camera, controls, size.width, size.height, frame, insetRight]);
+    const span = Math.max(9, stand.distanceTo(look) + 7);
+    const zoom = Math.max(home.zoom * 1.15, Math.min(free / (span * 1.25), size.height / (span * 0.95)));
+    const target = stand.clone().lerp(look, 0.35).setY(0.8).add(insetShift(azimuth, zoom, insetRight));
+    return { target, azimuth, elevation: 0.62, zoom };
+  }, [plan, width, depth, home.zoom, free, size.height, insetRight]);
+
+  const goal = useRef<CameraPose | null>(null);
+  const current = useRef<CameraPose | null>(null);
+  const focused = useRef(false);
+
+  // Nobody speaking yet, or the floor changed: snap to the whole floor, as before.
+  useEffect(() => {
+    if (focused.current) return;
+    current.current = { ...home, target: home.target.clone() };
+    goal.current = null;
+    applyPose(camera, controls, current.current);
+  }, [camera, controls, home]);
+
+  // A new speaker cuts straight to them; silence waits a moment, then goes back to the floor.
+  useEffect(() => {
+    if (shot) {
+      focused.current = true;
+      goal.current = shot;
+      return;
+    }
+    if (!focused.current) return;
+    const timer = setTimeout(() => {
+      focused.current = false;
+      goal.current = home;
+    }, RETURN_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [shot, home]);
+
+  // Grabbing the view hands it back to the user mid-move.
+  useEffect(() => {
+    const c = controls as unknown as THREE.EventDispatcher<{ start: object }> | null;
+    if (!c?.addEventListener) return;
+    const stop = () => {
+      goal.current = null;
+    };
+    c.addEventListener('start', stop);
+    return () => c.removeEventListener('start', stop);
+  }, [controls]);
+
+  useFrame((_, delta) => {
+    const to = goal.current;
+    const at = current.current;
+    if (!to || !at) return;
+    const k = 1 - Math.exp(-Math.min(delta, 0.1) * 3.2);
+    let dAz = (to.azimuth - at.azimuth) % (Math.PI * 2);
+    if (dAz > Math.PI) dAz -= Math.PI * 2;
+    if (dAz < -Math.PI) dAz += Math.PI * 2;
+    at.target.lerp(to.target, k);
+    at.azimuth += dAz * k;
+    at.elevation += (to.elevation - at.elevation) * k;
+    at.zoom += (to.zoom - at.zoom) * k;
+    applyPose(camera, controls, at);
+    if (at.target.distanceTo(to.target) < 0.02 && Math.abs(dAz) < 0.002 && Math.abs(to.zoom - at.zoom) < to.zoom * 0.002) goal.current = null;
+  });
   return null;
 }
 
@@ -500,7 +608,7 @@ function World({
         />
       )}
       <OrbitControls makeDefault enableRotate={interactive} enablePan={interactive} enableZoom={interactive} maxPolarAngle={Math.PI / 2.15} minZoom={2} maxZoom={200} />
-      <FitCamera spec={spec} insetRight={insetRight} />
+      <CameraDirector spec={spec} insetRight={insetRight} walkPlans={walkPlans} speakingRole={speakingRole} />
       {dropType && onDropOnFloor && <FloorDrop spec={spec} type={dropType} onOver={onDragOverFloor} onDrop={onDropOnFloor} />}
     </>
   );

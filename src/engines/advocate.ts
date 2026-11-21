@@ -35,7 +35,7 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     hatColor: '#e59a28',
     skinColor: '#8d5d3e',
     prop: 'tablet',
-    voice: 'Fenrir',
+    voice: 'Orus',
     style: 'Direct, urgent plant operations engineer speaking clearly on the factory floor',
   },
   safety: {
@@ -49,7 +49,7 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     hatColor: '#f3f1e8',
     skinColor: '#6f4630',
     prop: 'clipboard',
-    voice: 'Kore',
+    voice: 'Pulcherrima',
     style: 'Firm, authoritative EHS safety auditor doing a live floor inspection',
   },
   cfo: {
@@ -63,7 +63,7 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     hatColor: '#23272e',
     skinColor: '#dcb697',
     prop: 'ledger',
-    voice: 'Charon',
+    voice: 'Sadaltager',
     style: 'Crisp, analytical manufacturing CFO questioning capital spend and unit economics',
   },
   compliance: {
@@ -77,7 +77,7 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     hatColor: '#1f2329',
     skinColor: '#a67452',
     prop: 'blueprint',
-    voice: 'Zephyr',
+    voice: 'Erinome',
     style: 'Precise, calm industrial architect checking the floor against client specifications',
   },
   maintenance: {
@@ -91,7 +91,7 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     hatColor: '#b9412c',
     skinColor: '#dfb497',
     prop: 'wrench',
-    voice: 'Puck',
+    voice: 'Algenib',
     style: 'Pragmatic, seasoned lead maintenance technician pointing out service traps',
   },
   fixer: {
@@ -105,7 +105,7 @@ export const ADVOCATE_CHARACTERS: Record<CharacterRole, AdvocateCharacter> = {
     hatColor: '#f2ece1',
     skinColor: '#c99371',
     prop: 'laser',
-    voice: 'Kore',
+    voice: 'Sulafat',
     style: 'Confident, solution-focused industrial engineer presenting a verified layout fix',
   },
 };

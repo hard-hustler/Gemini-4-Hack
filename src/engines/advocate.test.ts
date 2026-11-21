@@ -20,7 +20,7 @@ describe('advocate engine', () => {
     for (const role of [...ADVOCATE_ROLES, 'fixer'] as const) {
       const c = ADVOCATE_CHARACTERS[role];
       assert.ok(c.name.length > 0);
-      assert.ok(['Fenrir', 'Kore', 'Charon', 'Zephyr', 'Puck'].includes(c.voice));
+      assert.ok(['Orus', 'Pulcherrima', 'Sadaltager', 'Erinome', 'Algenib', 'Sulafat'].includes(c.voice));
     }
   });
 
