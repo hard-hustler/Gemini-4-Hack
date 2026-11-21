@@ -218,12 +218,8 @@ export function Home({
           <button className="hn-link" onClick={onDemos}>
             {hasProjects ? 'Projects' : 'Demos'}
           </button>
-<<<<<<< HEAD
-          <button className="hn-link" onClick={onCatalog}>
-=======
           <CommerceCartButton />
-          <button className="home-link" onClick={onCatalog}>
->>>>>>> d37cf7f (shopify)
+          <button className="hn-link" onClick={onCatalog}>
             Catalog
           </button>
           <a className="hn-link" href="/eval/index.html" target="_blank" rel="noreferrer">

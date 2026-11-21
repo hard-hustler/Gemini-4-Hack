@@ -181,7 +181,6 @@ export function PlanReview({
           </div>
         )}
 
-<<<<<<< HEAD
         <div className="pd-body">
           {/* the swarm keeps working while hidden, so it stays mounted */}
           {swarm && (
@@ -202,84 +201,6 @@ export function PlanReview({
               />
             </div>
           )}
-=======
-        <div className="plan-grid">
-          <section>
-            <div className="section-head">
-              <div>
-                <h2>Equipment</h2>
-                <p className="muted">
-                  {stations} stations in process order · {totalText}.
-                </p>
-              </div>
-              <button className="ghost" onClick={() => setSwarm('open')} disabled={run.busy || stations === 0}>
-                {swarm === 'hidden' ? 'Show the swarm' : req.research ? 'Design the equipment' : 'Source real equipment'}
-              </button>
-            </div>
-            <div className="equipment">
-              {lines.map((l, i) => {
-                const zone = req.steps.find((x) => x.type === l.stepType)?.zone;
-                const prev = i > 0 ? req.steps.find((x) => x.type === lines[i - 1].stepType)?.zone : undefined;
-                return (
-                <div key={l.stepType}>
-                {zone && zone !== prev && <h3 className="zone-head">{zone}</h3>}
-                <article className={`equip${l.qty === 0 ? ' off' : ''}`}>
-                  <MachineThumb item={l.item} />
-                  <div className="equip-body">
-                    <span>
-                      {i + 1}. {l.label}
-                    </span>
-                    <b>{l.item.name}</b>
-                    <span className="muted small">
-                      {l.item.footprint.w} × {l.item.footprint.d} m · {l.item.cycleTimeSec} s a unit{l.item.powerKw ? ` · ${l.item.powerKw} kW` : ''}
-                      {l.item.needsWater ? ' · needs water' : ''}
-                      {l.item.source === 'shopify' ? ` · from ${l.item.listing?.seller ?? 'Shop'}` : ''}
-                    </span>
-                    {l.item.model && l.item.modelChecks && (
-                      <span className="muted small">
-                        Modelled from the listing{l.item.modelChecks.sawPhoto ? ' photo' : ' text'} in {l.item.modelChecks.parts} parts. The inspector rates the likeness {pct(l.item.modelChecks.likeness)}
-                        {l.item.modelChecks.rounds > 1 ? ` after ${l.item.modelChecks.rounds} rounds` : ''}.{!l.item.modelChecks.dimsStated ? ' Size is estimated; the listing does not state it.' : ''}
-                      </span>
-                    )}
-                    {l.item.source === 'shopify' && l.item.recipe && (
-                      <span className="muted small">
-                        Built from the listing{l.item.recipeChecks?.sawPhoto ? ' photo' : ' text'} as a {l.item.recipe.archetype}
-                        {l.item.recipe.features.length ? ` with ${featureText(l.item.recipe.features)}` : ''}.
-                        {l.item.recipeChecks && !l.item.recipeChecks.dimsStated ? ' Size is estimated; the listing does not state it.' : ''}
-                        {l.item.recipeChecks?.dropped.length ? ` Left out: ${l.item.recipeChecks.dropped.map((x) => `${x.kind} (${x.why})`).join(', ')}.` : ''}
-                      </span>
-                    )}
-                    {l.inBrief !== undefined && l.inBrief < 0.5 && (
-                      <span className="flag">
-                        <Icon name="warn" size={14} /> Not clearly in your brief
-                      </span>
-                    )}
-                    {l.item.source === 'shopify' && l.item.confidence !== undefined && l.item.confidence < 0.5 && (
-                      <span className="flag">
-                        <Icon name="warn" size={14} /> This listing may not suit the step
-                      </span>
-                    )}
-                  </div>
-                  <span className="equip-price">{l.item.listing ? formatPrice(l.item.listing) : `${money(l.item.price)} estimate`}</span>
-                  <div className="stepper" role="group" aria-label={`Quantity of ${l.label}`}>
-                    <button onClick={() => setLine(i, { qty: Math.max(0, l.qty - 1) })} aria-label="One fewer">
-                      <Icon name="minus" size={14} />
-                    </button>
-                    <span>{l.qty}</span>
-                    <button onClick={() => setLine(i, { qty: Math.min(12, l.qty + 1) })} aria-label="One more">
-                      <Icon name="plus" size={14} />
-                    </button>
-                  </div>
-                  <button className="ghost sm" onClick={() => setReplacing(i)}>
-                    Replace
-                  </button>
-                </article>
-                </div>
-                );
-              })}
-            </div>
-          </section>
->>>>>>> d37cf7f (shopify)
 
           {!sourcing && (
             <div className="pd-grid">
@@ -348,7 +269,7 @@ export function PlanReview({
                               </span>
                             )}
                           </div>
-                          <span className="equip-price">{money(l.item.price)}</span>
+                          <span className="equip-price">{l.item.listing ? formatPrice(l.item.listing) : `${money(l.item.price)} est.`}</span>
                           <div className="stepper" role="group" aria-label={`Quantity of ${l.label}`}>
                             <button onClick={() => setLine(i, { qty: Math.max(0, l.qty - 1) })} aria-label="One fewer">
                               <Icon name="minus" size={14} />
@@ -404,6 +325,7 @@ export function PlanReview({
                 <details>
                   <summary>Your brief</summary>
                   <p className="brief-text">{project.brief.text || 'No text.'}</p>
+                  {project.brief.files.length > 0 && <p className="muted small">Attached: {project.brief.files.map((f) => f.name).join(', ')}</p>}
                 </details>
               </aside>
             </div>
@@ -413,7 +335,7 @@ export function PlanReview({
 
         <footer className="pd-foot">
           <span className="num">
-            {stations} stations · {money(total)}
+            {stations} stations · {totalText}
           </span>
           <RunStatus state={run} />
           <div className="pd-actions" ref={setActionsHost}>
@@ -427,66 +349,9 @@ export function PlanReview({
                 </button>
               </>
             )}
-<<<<<<< HEAD
           </div>
         </footer>
       </section>
-=======
-            <div>
-              <h2>Assumed</h2>
-              {req.assumptions.length ? (
-                <ul>
-                  {req.assumptions.map((a, i) => (
-                    <li key={i}>{a}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted">Nothing. The brief covered everything.</p>
-              )}
-            </div>
-            <div>
-              <h2>Your brief</h2>
-              <p className="brief-text">{project.brief.text || 'No text.'}</p>
-              {project.brief.files.length > 0 && <p className="muted small">Attached: {project.brief.files.map((f) => f.name).join(', ')}</p>}
-            </div>
-          </aside>
-        </div>
-
-        {error && <Notice tone="error" title={error.message} lines={error.lines} onClose={() => setError(null)} />}
-      </main>
-
-      <footer className="actionbar">
-        <span className="num">
-          {stations} stations · {totalText}
-        </span>
-        <RunStatus state={run} />
-        {project.versions.length > 0 && onOpenSim && (
-          <button className="text" onClick={onOpenSim}>
-            Back to the simulation
-          </button>
-        )}
-        <button className="primary lg" disabled={run.busy || stations === 0} onClick={() => void generate()}>
-          {project.versions.length ? 'Lay it out again' : 'Lay it out and simulate'} <Icon name="arrowRight" />
-        </button>
-      </footer>
-
-      {swarm && (
-        <div style={swarm === 'hidden' ? { display: 'none' } : undefined}>
-          <Swarm
-            lines={lines}
-            concept={!!req.research}
-            context={req.summary}
-            onClose={() => setSwarm((cur) => (cur === 'open' ? 'hidden' : null))}
-            onApply={(items, events) => {
-              const models = { ...(project.models ?? {}) };
-              for (const item of Object.values(items)) if (item.model) models[item.id] = item.model;
-              onChange({ equipment: lines.map((l) => (items[l.stepType] ? { ...l, item: items[l.stepType] } : l)), models, trace: [...project.trace, ...events] });
-              setSwarm(null);
-            }}
-          />
-        </div>
-      )}
->>>>>>> d37cf7f (shopify)
 
       {replacing !== null && (
         <Replace
