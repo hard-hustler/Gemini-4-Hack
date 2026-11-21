@@ -40,11 +40,13 @@ Builders propose; checkers decide. Models never emit coordinates.
 | Convert | `gemini-4-hydrogen` + `gemini-decision-1` | Shop listing -> `CatalogItem` with a suitability score | the user |
 | Place | `src/engines/place.ts` | `FactorySpec` | `validate()`: a layout is valid by construction or the placer says why not |
 | Simulate | `src/engines/simulate.ts` | metrics | queue-theory check in the eval |
-| Improve | `gemini-4-neon`, or a Managed Agent running the seeded search in a sandbox | candidate op lists | `validate()`, Decisions gate, then the simulator |
+| Improve | goal-driven loop (`server/improve.ts`): `gemini-4-neon` proposes for a goal, seeing what earlier rounds tried and how each turned out; a seeded search competes with it; or a Managed Agent runs the search in a sandbox | candidate op lists | `validate()`, Decisions gate, then the simulator; a change is kept only if it beats the current layout, and the loop stops when a round finds nothing better |
 | Edit | `gemini-4-hydrogen` | edit ops from text or voice | `validate()`, errors fed back |
 
-Every stage appends a `TraceEvent`; the dark tracker in the UI is that trace,
-and clicking it opens the run log.
+Every stage emits a `TraceEvent`, streamed to the browser as newline-delimited
+JSON while the call is still running. The dark tracker shows the step in
+flight; "Run log" in the top bar keeps every step taken on the project. Each
+change the improve loop keeps is saved as its own version.
 
 Why this shape: a model placing stations directly needed up to three attempts
 to pass the layout rules, and on the layout benchmark its starting point added
@@ -120,9 +122,8 @@ Where it breaks, and what the numbers do not show:
 - A plan can still be valid but unfaithful (wrong station count). The
   Decisions check on the Equipment screen flags doubtful steps but does not
   block.
-- In-browser mic capture is untested; the voice path was tested by posting a
-  WAV clip to the server.
-- Neon takes 40 to 80 s to propose six candidates.
+- An improve run takes about two minutes (three rounds, 30 to 40 s per Neon call).
+- The microphone path was tested in the browser with a synthetic audio stream, not a physical mic.
 - The sim charges forklift time only for loaded travel, and aisle width is not
   checked against walls.
 - Built-in equipment models are procedural placeholders.

@@ -43,7 +43,7 @@ export interface SearchResult {
  * Seeded hill climb over station positions, rotations and dock positions.
  * Every candidate goes through validate(); only valid ones are simulated.
  */
-export function localSearch(start: FactorySpec, opts: { iters?: number; seed?: number; simSeeds?: number; moveDocks?: boolean; lockDockWalls?: boolean } = {}): SearchResult {
+export function localSearch(start: FactorySpec, opts: { iters?: number; seed?: number; simSeeds?: number; moveDocks?: boolean; lockDockWalls?: boolean; score?: (base: Metrics, m: Metrics) => number } = {}): SearchResult {
   const iters = opts.iters ?? 300;
   const simSeeds = opts.simSeeds ?? 6;
   const rnd = mulberry32(opts.seed ?? 1);
@@ -54,7 +54,7 @@ export function localSearch(start: FactorySpec, opts: { iters?: number; seed?: n
   const base = baseEv.metrics;
 
   let best = start;
-  let bestScore = 1;
+  let bestScore = (opts.score ?? objective)(base, base);
   let valid = 0;
   let accepted = 0;
 
@@ -102,7 +102,7 @@ export function localSearch(start: FactorySpec, opts: { iters?: number; seed?: n
     valid++;
     const ev = evaluate(next, simSeeds);
     if (!ev.ok) continue;
-    const score = objective(base, ev.metrics);
+    const score = (opts.score ?? objective)(base, ev.metrics);
     if (score < bestScore - 1e-6) {
       best = next;
       bestScore = score;

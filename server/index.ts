@@ -1,8 +1,10 @@
 // Small Node proxy for model calls. The key stays server-side in GEMINI_API_KEY.
-import express, { type Response } from 'express';
+import express, { type Request, type Response } from 'express';
+import type { Emit } from '../src/contracts';
 import type { FactorySpec } from '../src/spec';
 import { GeminiError, MODELS, type Block } from './gemini';
 import { deepSearch } from './agent';
+import { improveToGoal, type Goal } from './improve';
 import { optimise } from './optimize';
 import { convertListing, layoutProject, planProject } from './harness';
 import { priceEquipment, searchListings } from './shop';
@@ -33,6 +35,35 @@ function fail(res: Response, e: unknown) {
   }
 }
 
+/**
+ * Streamed endpoint: newline-delimited JSON. Each harness step is written as it happens
+ * ({t:'event'}), then one {t:'result'} or {t:'error'} line ends the response.
+ */
+function streamed<B>(handler: (body: B, emit: Emit) => Promise<unknown> | unknown) {
+  return async (req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    const write = (line: unknown) => res.write(JSON.stringify(line) + '\n');
+    try {
+      const data = await handler(req.body as B, (e) => write({ t: 'event', e }));
+      write({ t: 'result', data });
+    } catch (e) {
+      const extra = e as { lines?: string[]; trace?: unknown[]; errors?: { message: string }[]; attempts?: unknown[] };
+      if (e instanceof GeminiError) console.error('gemini error', e.status, e.code, e.message);
+      else if (!extra.lines && !(e instanceof PipelineError)) console.error(e);
+      write({
+        t: 'error',
+        error: e instanceof GeminiError ? `Gemini ${e.code}: ${e.message}` : ((e as Error).message ?? 'Server error'),
+        errors: extra.lines?.map((message) => ({ message })) ?? (e instanceof PipelineError ? e.errors : []),
+        trace: extra.trace ?? [],
+      });
+    }
+    res.end();
+  };
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, hasKey: Boolean(process.env.GEMINI_API_KEY), models: MODELS });
 });
@@ -60,17 +91,25 @@ app.post('/api/read', async (req, res) => {
 });
 
 // Typed or spoken instruction -> validated edit ops.
-app.post('/api/edit', async (req, res) => {
-  try {
-    const { spec, text, audio } = req.body as { spec: FactorySpec; text?: string; audio?: { mimeType: string; data: string } };
-    if (!spec || (!text && !audio)) return void res.status(400).json({ error: 'spec and one of text or audio are required' });
+app.post(
+  '/api/edit',
+  streamed<{ spec: FactorySpec; text?: string; audio?: { mimeType: string; data: string } }>(async ({ spec, text, audio }, emit) => {
+    if (!spec || (!text && !audio)) throw new Error('spec and one of text or audio are required');
     const started = Date.now();
+    emit({ stage: 'plan', actor: 'hydrogen', title: audio ? 'Listening to the instruction' : 'Planning the edit', ms: 0, status: 'running' });
     const out = await editPlan(spec, { text, audio: audio ? mediaBlock(audio.mimeType, audio.data) : undefined });
-    res.json({ ...out, ms: Date.now() - started });
-  } catch (e) {
-    fail(res, e);
-  }
-});
+    const retries = out.attempts.length - 1;
+    emit({
+      stage: 'plan',
+      actor: 'hydrogen',
+      title: out.ops.length ? `Edit: “${out.transcript}”` : `No change for “${out.transcript}”`,
+      detail: out.ops.length ? `${out.ops.length} op${out.ops.length > 1 ? 's' : ''}${retries ? `, valid after ${retries} rejected attempt${retries > 1 ? 's' : ''}` : ', valid first time'}` : out.reason,
+      ms: Date.now() - started,
+      status: !out.ops.length ? 'fail' : retries ? 'retry' : 'ok',
+    });
+    return { ...out, ms: Date.now() - started };
+  }),
+);
 
 // Neon proposes candidates; only validated ones are gated, simulated and returned.
 app.post('/api/optimise', async (req, res) => {
@@ -84,46 +123,40 @@ app.post('/api/optimise', async (req, res) => {
 });
 
 // Managed agent runs the layout search in parallel in a sandbox; results are re-checked here.
-app.post('/api/deep-search', async (req, res) => {
-  try {
-    const { spec } = req.body as { spec: FactorySpec };
-    if (!spec) return void res.status(400).json({ error: 'spec is required' });
-    res.json(await deepSearch(spec));
-  } catch (e) {
-    fail(res, e);
-  }
-});
+app.post(
+  '/api/deep-search',
+  streamed<{ spec: FactorySpec }>(async ({ spec }, emit) => {
+    if (!spec) throw new Error('spec is required');
+    emit({ stage: 'improve', actor: 'agent', title: 'Managed agent is running 8 searches in its sandbox', ms: 0, status: 'running' });
+    const out = await deepSearch(spec);
+    const ok = out.candidates.filter((c) => c.status === 'evaluated').length;
+    emit({ stage: 'improve', actor: 'agent', title: `Sandbox search returned ${out.stats.proposed} layouts`, detail: `${ok} of the top ${out.candidates.length} pass the layout rules after re-checking here`, ms: out.stats.ms.total, status: 'ok' });
+    return out;
+  }),
+);
 
-// Shop MCP: real listings and prices for each station type in the plan.
-app.post('/api/shop/price', async (req, res) => {
-  try {
-    const { spec } = req.body as { spec: FactorySpec };
-    if (!spec) return void res.status(400).json({ error: 'spec is required' });
-    res.json(await priceEquipment(spec));
-  } catch (e) {
-    fail(res, e);
-  }
-});
+// Goal-driven improve loop: propose -> validate -> gate -> simulate -> keep the best -> repeat.
+app.post(
+  '/api/improve',
+  streamed<{ spec: FactorySpec; goal?: Goal }>(async ({ spec, goal }, emit) => {
+    if (!spec) throw new Error('spec is required');
+    return improveToGoal(spec, goal ?? 'cost', emit);
+  }),
+);
 
 // ---- Harness: brief -> plan -> (user review) -> layout ----
-app.post('/api/project/plan', async (req, res) => {
-  try {
-    const { text, files } = req.body as { text?: string; files?: { name: string; mimeType: string; data: string }[] };
-    res.json(await planProject(text ?? '', files ?? []));
-  } catch (e) {
-    fail(res, e);
-  }
-});
+app.post(
+  '/api/project/plan',
+  streamed<{ text?: string; files?: { name: string; mimeType: string; data: string }[] }>(({ text, files }, emit) => planProject(text ?? '', files ?? [], emit)),
+);
 
-app.post('/api/project/layout', (req, res) => {
-  try {
-    const { requirements, equipment } = req.body;
-    if (!requirements || !equipment) return void res.status(400).json({ error: 'requirements and equipment are required' });
-    res.json(layoutProject(requirements, equipment));
-  } catch (e) {
-    fail(res, e);
-  }
-});
+app.post(
+  '/api/project/layout',
+  streamed<{ requirements: Parameters<typeof layoutProject>[0]; equipment: Parameters<typeof layoutProject>[1] }>(({ requirements, equipment }, emit) => {
+    if (!requirements || !equipment) throw new Error('requirements and equipment are required');
+    return layoutProject(requirements, equipment, emit);
+  }),
+);
 
 // ---- Catalog seam: Shopify search and listing -> CatalogItem ----
 app.post('/api/catalog/search', async (req, res) => {
@@ -136,15 +169,13 @@ app.post('/api/catalog/search', async (req, res) => {
   }
 });
 
-app.post('/api/catalog/convert', async (req, res) => {
-  try {
-    const { listing, step } = req.body;
-    if (!listing || !step) return void res.status(400).json({ error: 'listing and step are required' });
-    res.json(await convertListing(listing, step));
-  } catch (e) {
-    fail(res, e);
-  }
-});
+app.post(
+  '/api/catalog/convert',
+  streamed<{ listing: Parameters<typeof convertListing>[0]; step: Parameters<typeof convertListing>[1] }>(({ listing, step }, emit) => {
+    if (!listing || !step) throw new Error('listing and step are required');
+    return convertListing(listing, step, emit);
+  }),
+);
 
 const port = Number(process.env.PORT ?? 8787);
 app.listen(port, () => console.log(`api on http://localhost:${port} (key ${process.env.GEMINI_API_KEY ? 'set' : 'MISSING'})`));

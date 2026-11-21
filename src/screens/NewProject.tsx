@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react';
 import type { PlanResult } from '../contracts';
-import { api, ApiError, type Project } from '../store';
+import { apiStream, ApiError, type Project } from '../store';
 import { fileToBase64, startRecording, type Recorder } from '../ui/audio';
-import { Notice, TopBar, Tracker } from '../ui/common';
+import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
+import { Icon } from '../ui/icons';
 
 interface Attachment {
   name: string;
@@ -10,19 +11,26 @@ interface Attachment {
   data: string;
 }
 
-const SAMPLES = [
-  'We assemble small espresso grinders. Parts arrive on pallets, get kitted, then burr sub-assembly, final assembly, a run-in test, then pack and ship. About 40 units an hour. The unit is 16 by 12 metres, roller door on the west side, shipping out the east. Water is on the south wall.',
-  'A bike wheel workshop in a 14 by 10 m unit: rim and spoke storage, lacing, truing, inspection, then boxing. 25 wheels an hour. One roller door on the south wall for both receiving and shipping.',
+const EXAMPLES = [
+  {
+    label: 'Espresso grinder line',
+    text: 'We assemble small espresso grinders. Parts arrive on pallets, get kitted, then burr sub-assembly, final assembly, a run-in test, then pack and ship. About 40 units an hour. The unit is 16 by 12 metres, roller door on the west side, shipping out the east. Water is on the south wall.',
+  },
+  {
+    label: 'Bike wheel workshop',
+    text: 'A bike wheel workshop in a 14 by 10 m unit: rim and spoke storage, lacing, truing, inspection, then boxing. 25 wheels an hour. One roller door on the south wall for both receiving and shipping.',
+  },
 ];
 
 export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreated: (p: Project) => void }) {
   const [text, setText] = useState('');
   const [files, setFiles] = useState<Attachment[]>([]);
-  const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const recorder = useRef<Recorder | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const run = useRun();
+  const busy = run.busy;
 
   const addFiles = async (list: FileList | File[]) => {
     const added: Attachment[] = [];
@@ -41,7 +49,7 @@ export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreate
       recorder.current = null;
       try {
         const audio = await rec.stop();
-        setFiles((cur) => [...cur, { name: `voice-note-${cur.filter((f) => f.mimeType.startsWith('audio/')).length + 1}.wav`, ...audio }]);
+        setFiles((cur) => [...cur, { name: `Voice note ${cur.filter((f) => f.mimeType.startsWith('audio/')).length + 1}`, ...audio }]);
       } catch (e) {
         setError(new ApiError('Could not process the recording', [(e as Error).message]));
       }
@@ -55,13 +63,12 @@ export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreate
     }
   };
 
-  const ready = (text.trim().length > 0 || files.length > 0) && files.every((f) => f.data) && !busy && !recording;
+  const ready = (text.trim().length > 0 || files.length > 0) && !busy && !recording;
   const submit = async () => {
     if (!ready) return;
-    setBusy(true);
     setError(null);
     try {
-      const plan = await api<PlanResult>('/api/project/plan', { text, files });
+      const { value: plan } = await run.run('Reading the brief', (onEvent) => apiStream<PlanResult>('/api/project/plan', { text, files }, onEvent));
       onCreated({
         id: `p-${Date.now()}`,
         name: plan.requirements.name,
@@ -76,7 +83,6 @@ export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreate
       });
     } catch (e) {
       setError(e instanceof ApiError ? e : new ApiError((e as Error).message));
-      setBusy(false);
     }
   };
 
@@ -84,9 +90,8 @@ export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreate
     <div className="page">
       <TopBar onHome={onHome} crumbs={[{ label: 'Brief', active: true }, { label: 'Equipment' }, { label: 'Simulation' }]} />
       <main className="brief">
-        <span className="eyebrow">New project</span>
         <h1>What are you building, and where?</h1>
-        <p className="lede">Say what the line makes, the steps it goes through, roughly how many an hour, and the space you have. A floor sketch or a spec sheet helps; anything you leave out is assumed and listed for you to correct.</p>
+        <p className="lede">Say what the line makes, the steps it goes through, how many an hour, and the space you have. Anything you leave out gets assumed, and you can correct it on the next screen.</p>
 
         <div
           className="composer"
@@ -99,6 +104,9 @@ export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreate
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit();
+            }}
             placeholder="We assemble small espresso grinders. Parts arrive on pallets, get kitted, then…"
             rows={6}
             disabled={busy}
@@ -108,10 +116,10 @@ export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreate
             <div className="attachments">
               {files.map((f, i) => (
                 <span key={i} className="attachment">
-                  {f.mimeType.startsWith('image/') && f.data ? <img src={`data:${f.mimeType};base64,${f.data}`} alt="" /> : <i>{f.mimeType.startsWith('audio/') ? 'voice' : f.mimeType.includes('pdf') ? 'pdf' : 'file'}</i>}
+                  {f.mimeType.startsWith('image/') ? <img src={`data:${f.mimeType};base64,${f.data}`} alt="" /> : <Icon name={f.mimeType.startsWith('audio/') ? 'mic' : 'clip'} />}
                   {f.name}
-                  <button onClick={() => setFiles(files.filter((_, k) => k !== i))} disabled={busy} aria-label={`Remove ${f.name}`}>
-                    ×
+                  <button className="icon-btn" onClick={() => setFiles(files.filter((_, k) => k !== i))} disabled={busy} aria-label={`Remove ${f.name}`}>
+                    <Icon name="x" size={14} />
                   </button>
                 </span>
               ))}
@@ -129,37 +137,36 @@ export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreate
                 e.target.value = '';
               }}
             />
-            <button className="ghost" onClick={() => input.current?.click()} disabled={busy}>
-              Add sketch or PDF
+            <button className="text" onClick={() => input.current?.click()} disabled={busy}>
+              <Icon name="clip" /> Sketch or PDF
             </button>
-            <button className={`ghost${recording ? ' rec' : ''}`} onClick={() => void toggleMic()} disabled={busy}>
-              {recording ? 'Stop recording' : 'Record a voice note'}
+            <button className={recording ? 'ghost rec' : 'text'} onClick={() => void toggleMic()} disabled={busy}>
+              <Icon name={recording ? 'stop' : 'mic'} /> {recording ? 'Stop recording' : 'Voice note'}
             </button>
             <span className="spacer" />
             <button className="primary" onClick={() => void submit()} disabled={!ready}>
-              {busy ? 'Planning…' : 'Create plan'}
+              Create plan <Icon name="arrowRight" />
             </button>
           </div>
         </div>
 
-        <div className="samples">
-          <span className="eyebrow">Or start from an example</span>
-          <div className="sample-row">
-            {SAMPLES.map((s, i) => (
-              <button key={i} className="sample" disabled={busy} onClick={() => setText(s)}>
-                {s.slice(0, 96)}…
-              </button>
-            ))}
-            <button className="sample" disabled={busy} onClick={() => void addSampleSketch()}>
-              <img src="/sample-sketch.png" alt="" />
-              Attach a hand-drawn floor sketch
+        <div className="examples">
+          Try
+          {EXAMPLES.map((ex) => (
+            <button key={ex.label} className="ghost sm" disabled={busy} onClick={() => setText(ex.text)}>
+              {ex.label}
             </button>
-          </div>
+          ))}
+          <button className="ghost sm" disabled={busy} onClick={() => void addSampleSketch()}>
+            A hand-drawn floor sketch
+          </button>
         </div>
 
         {error && <Notice tone="error" title={error.message} lines={error.lines} onClose={() => setError(null)} />}
       </main>
-      <Tracker events={error?.trace ?? []} running={busy ? 'Hydrogen is reading the brief' : null} stages={['Plan', 'Equip', 'Check']} />
+      <div className="bottom-status">
+        <RunStatus state={run} />
+      </div>
     </div>
   );
 }

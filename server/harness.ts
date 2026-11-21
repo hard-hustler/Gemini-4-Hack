@@ -12,13 +12,26 @@
 // Builders (Hydrogen, Neon) propose. Checkers (validate(), Decisions API, the simulator) decide.
 
 import { pickItem } from '../src/catalog';
-import type { CatalogItem, EquipmentLine, PlanResult, ProcessStep, Requirements, ShopListing, TraceEvent } from '../src/contracts';
+import type { CatalogItem, Emit, EquipmentLine, PlanResult, ProcessStep, Requirements, ShopListing, TraceEvent } from '../src/contracts';
 import { buildLayout, PlaceError } from '../src/engines/place';
 import { evaluate } from '../src/engines/versions';
 import type { Wall } from '../src/spec';
 import { decide, interact, MODELS, type Block, type Question, type Step } from './gemini';
 
 const MAX_ATTEMPTS = 3;
+
+/** A trace that is both collected (for the result) and streamed (for the live tracker). */
+function tracer(emit?: Emit) {
+  const trace: TraceEvent[] = [];
+  return {
+    trace,
+    log: (e: TraceEvent) => {
+      trace.push(e);
+      emit?.(e);
+    },
+    running: (stage: TraceEvent['stage'], actor: TraceEvent['actor'], title: string) => emit?.({ stage, actor, title, ms: 0, status: 'running' }),
+  };
+}
 const WALLS = ['N', 'S', 'E', 'W'];
 
 const stepSchema = {
@@ -146,8 +159,8 @@ function briefBlocks(text: string, files: BriefFile[]): Block[] {
 }
 
 /** Stage 1 to 3: brief -> requirements -> bill of equipment -> checks. No layout yet; the user reviews first. */
-export async function planProject(text: string, files: BriefFile[]): Promise<PlanResult> {
-  const trace: TraceEvent[] = [];
+export async function planProject(text: string, files: BriefFile[], emit?: Emit): Promise<PlanResult> {
+  const { trace, log, running } = tracer(emit);
   const brief = briefBlocks(text, files);
   if (!brief.length) throw new Error('The brief is empty');
   const kinds = [text.trim() ? 'text' : '', ...new Set(files.map((f) => f.mimeType.split('/')[0]))].filter(Boolean).join(', ');
@@ -156,10 +169,11 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
   let req: Requirements | null = null;
   let errs: string[] = [];
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    running(attempt === 1 ? 'read' : 'plan', 'hydrogen', attempt === 1 ? 'Reading the brief' : 'Revising the plan');
     const res = await interact<any>({ model: MODELS.hydrogen, input: steps, system: PLAN_SYSTEM, schema: requirementsSchema, thinking: 'low' });
     const candidate = clean(res.json);
     errs = checkRequirements(candidate);
-    trace.push({
+    log({
       stage: attempt === 1 ? 'read' : 'plan',
       actor: 'hydrogen',
       title: attempt === 1 ? `Read the brief (${kinds})` : `Revised the plan (attempt ${attempt})`,
@@ -175,7 +189,7 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
     steps.push({ type: 'user_input', content: [{ type: 'text', text: `Those requirements were rejected. Fix every problem and emit the full requirements again.\n${errs.map((e) => `- ${e}`).join('\n')}` }] });
   }
   if (!req) {
-    trace.push({ stage: 'plan', actor: 'engine', title: 'No usable plan', detail: errs.join('; '), ms: 0, status: 'fail' });
+    log({ stage: 'plan', actor: 'engine', title: 'No usable plan', detail: errs.join('; '), ms: 0, status: 'fail' });
     throw Object.assign(new Error(`Could not turn this brief into a usable plan after ${MAX_ATTEMPTS} attempts`), { lines: errs, trace });
   }
 
@@ -187,7 +201,7 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
     const t0 = Date.now();
     equipment = req.steps.map((s) => ({ stepType: s.type, label: s.label, qty: s.count, item: pickItem(s) }));
     const generic = equipment.filter((l) => l.item.id.startsWith('generic-')).length;
-    trace.push({ stage: 'equip', actor: 'engine', title: 'Matched equipment from the catalog', detail: `${equipment.length - generic} catalog items${generic ? `, ${generic} generic placeholder${generic > 1 ? 's' : ''}` : ''}`, ms: Date.now() - t0, status: 'ok' });
+    log({ stage: 'equip', actor: 'engine', title: 'Matched equipment from the catalog', detail: `${equipment.length - generic} catalog items${generic ? `, ${generic} generic placeholder${generic > 1 ? 's' : ''}` : ''}`, ms: Date.now() - t0, status: 'ok' });
 
     const contradicted: string[] = [];
     try {
@@ -209,6 +223,7 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
         instructions: `The input is a brief for a small factory or workshop. A planner read it and listed these process steps, in order: ${req.steps.map((s) => `${s.count} x ${s.label}`).join(', ')}. How completely and faithfully does that list cover the process the brief describes?`,
         criteria: ['misses most of what the brief asks for', 'misses or invents several steps', 'roughly right with one clear gap or extra', 'covers the brief with minor differences', 'covers everything the brief asks for and nothing else'],
       };
+      running('check', 'decisions', 'Checking the plan against the brief');
       const d = await decide(brief, questions);
       equipment.forEach((l, i) => {
         const a = d.answers[`s${i}`];
@@ -219,7 +234,7 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
       const c = d.answers.coverage;
       if (c?.type === 'score') coverage = c.score / 4;
       const doubtful = equipment.filter((l) => (l.inBrief ?? 1) < 0.5);
-      trace.push({
+      log({
         stage: 'check',
         actor: 'decisions',
         title: contradicted.length ? 'Check found counts that contradict the brief' : 'Checked the plan against the brief',
@@ -228,7 +243,7 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
         status: contradicted.length ? 'retry' : 'ok',
       });
     } catch (e) {
-      trace.push({ stage: 'check', actor: 'decisions', title: 'Check against the brief failed', detail: (e as Error).message, ms: 0, status: 'fail' });
+      log({ stage: 'check', actor: 'decisions', title: 'Check against the brief failed', detail: (e as Error).message, ms: 0, status: 'fail' });
     }
     if (!contradicted.length || round === 1) break;
 
@@ -236,14 +251,15 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
     steps.push({ type: 'model_output', content: [{ type: 'text', text: JSON.stringify(req) }] });
     steps.push({ type: 'user_input', content: [{ type: 'text', text: `An independent check against the brief found these problems. Fix them, change nothing else, and emit the full requirements again.\n${contradicted.map((c) => `- ${c}`).join('\n')}` }] });
     try {
+      running('plan', 'hydrogen', 'Revising the plan after the check');
       const res = await interact<any>({ model: MODELS.hydrogen, input: steps, system: PLAN_SYSTEM, schema: requirementsSchema, thinking: 'low' });
       const revised = clean(res.json);
       const bad = checkRequirements(revised);
-      trace.push({ stage: 'plan', actor: 'hydrogen', title: 'Revised the plan after the check', detail: bad.length ? `revision rejected, keeping the first plan: ${bad.join('; ')}` : revised.steps.map((s) => `${s.count} x ${s.label}`).join(', '), ms: res.ms, status: bad.length ? 'fail' : 'ok' });
+      log({ stage: 'plan', actor: 'hydrogen', title: 'Revised the plan after the check', detail: bad.length ? `revision rejected, keeping the first plan: ${bad.join('; ')}` : revised.steps.map((s) => `${s.count} x ${s.label}`).join(', '), ms: res.ms, status: bad.length ? 'fail' : 'ok' });
       if (bad.length) break;
       req = revised;
     } catch (e) {
-      trace.push({ stage: 'plan', actor: 'hydrogen', title: 'Revision failed, keeping the first plan', detail: (e as Error).message, ms: 0, status: 'fail' });
+      log({ stage: 'plan', actor: 'hydrogen', title: 'Revision failed, keeping the first plan', detail: (e as Error).message, ms: 0, status: 'fail' });
       break;
     }
   }
@@ -251,13 +267,14 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
 }
 
 /** Stage 4 and 5: approved requirements + equipment -> placed, validated, simulated layout. */
-export function layoutProject(requirements: Requirements, equipment: EquipmentLine[]) {
-  const trace: TraceEvent[] = [];
+export function layoutProject(requirements: Requirements, equipment: EquipmentLine[], emit?: Emit) {
+  const { trace, log, running } = tracer(emit);
+  running('place', 'engine', 'Placing the equipment');
   const t0 = Date.now();
   try {
     // First layout is the tidy flow line. Squeezing out travel is the Improve step's job, on request.
     const placed = buildLayout(requirements, equipment, { polish: false });
-    trace.push({
+    log({
       stage: 'place',
       actor: 'engine',
       title: placed.method === 'as drawn' ? 'Placed equipment as drawn' : 'Placed equipment along the process flow',
@@ -268,7 +285,7 @@ export function layoutProject(requirements: Requirements, equipment: EquipmentLi
     const t1 = Date.now();
     const ev = evaluate(placed.spec);
     if (!ev.ok) throw new PlaceError('Placed layout failed validation', ev.errors);
-    trace.push({
+    log({
       stage: 'simulate',
       actor: 'engine',
       title: 'Simulated 30 shifts',
@@ -279,7 +296,7 @@ export function layoutProject(requirements: Requirements, equipment: EquipmentLi
     return { spec: placed.spec, method: placed.method, trace };
   } catch (e) {
     const lines = e instanceof PlaceError ? e.errors.map((x) => x.message) : [];
-    trace.push({ stage: 'place', actor: 'engine', title: 'Could not place the equipment', detail: (e as Error).message, ms: Date.now() - t0, status: 'fail' });
+    log({ stage: 'place', actor: 'engine', title: 'Could not place the equipment', detail: (e as Error).message, ms: Date.now() - t0, status: 'fail' });
     throw Object.assign(new Error((e as Error).message), { lines, trace });
   }
 }
@@ -300,8 +317,9 @@ const itemSchema = {
 };
 
 /** Shopify listing -> CatalogItem. Hydrogen reads the specs; Decisions says whether it suits the step. */
-export async function convertListing(listing: ShopListing, step: { type: string; label: string; cycleTimeSec: number; operators: number }) {
-  const trace: TraceEvent[] = [];
+export async function convertListing(listing: ShopListing, step: { type: string; label: string; cycleTimeSec: number; operators: number }, emit?: Emit) {
+  const { trace, log, running } = tracer(emit);
+  running('convert', 'hydrogen', 'Reading specs from the listing');
   const text = `Title: ${listing.title}\nSeller: ${listing.seller}\nPrice: ${listing.price} ${listing.currency}\n${listing.dims ? `Size option: ${listing.dims.text}\n` : ''}Description: ${(listing.description ?? '').slice(0, 4000)}`;
   const res = await interact<any>({
     model: MODELS.hydrogen,
@@ -311,18 +329,19 @@ export async function convertListing(listing: ShopListing, step: { type: string;
   });
   const j = res.json ?? {};
   const side = (v: unknown, f: number) => (typeof v === 'number' && v >= 0.2 && v <= 12 ? Math.round(v * 100) / 100 : f);
-  trace.push({ stage: 'convert', actor: 'hydrogen', title: 'Read specs from the listing', detail: `${side(j.w, 2)} x ${side(j.d, 1)} x ${side(j.h, 1)} m${j.dimsStated ? '' : ' (estimated, not stated)'}`, ms: res.ms, status: 'ok' });
+  log({ stage: 'convert', actor: 'hydrogen', title: 'Read specs from the listing', detail: `${side(j.w, 2)} x ${side(j.d, 1)} x ${side(j.h, 1)} m${j.dimsStated ? '' : ' (estimated, not stated)'}`, ms: res.ms, status: 'ok' });
 
   let confidence: number | undefined;
   try {
+    running('check', 'decisions', 'Checking the listing suits the step');
     const d = await decide(text, {
       fit: { type: 'noul', instructions: `The input is a product listing. Is this product suitable equipment for a "${step.label}" (${step.type}) station in a small light-manufacturing workshop?` },
     });
     const a = d.answers.fit;
     if (a?.type === 'noul') confidence = a.noul;
-    trace.push({ stage: 'check', actor: 'decisions', title: 'Checked the listing suits the step', detail: `${Math.round((confidence ?? 0) * 100)}% suitable for ${step.label}`, ms: d.ms, status: 'ok' });
+    log({ stage: 'check', actor: 'decisions', title: 'Checked the listing suits the step', detail: `${Math.round((confidence ?? 0) * 100)}% suitable for ${step.label}`, ms: d.ms, status: 'ok' });
   } catch (e) {
-    trace.push({ stage: 'check', actor: 'decisions', title: 'Suitability check failed', detail: (e as Error).message, ms: 0, status: 'fail' });
+    log({ stage: 'check', actor: 'decisions', title: 'Suitability check failed', detail: (e as Error).message, ms: 0, status: 'fail' });
   }
 
   const item: CatalogItem = {

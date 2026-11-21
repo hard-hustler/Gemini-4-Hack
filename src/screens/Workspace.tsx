@@ -3,54 +3,111 @@ import type { TraceEvent } from '../contracts';
 import { compare, evaluate, makeVersion, type Version } from '../engines/versions';
 import { validate, type ValidationError } from '../engines/validate';
 import { applyOp, type EditOp, type FactorySpec } from '../spec';
-import { api, ApiError, money, num, type Project } from '../store';
+import { apiStream, ApiError, money, num, type Project } from '../store';
 import { startRecording, type Recorder } from '../ui/audio';
-import { Notice, TopBar, Tracker } from '../ui/common';
+import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
+import { Icon } from '../ui/icons';
 import { Scene, type Layers } from '../ui/Scene';
 
-interface Candidate {
+type Goal = 'cost' | 'lead' | 'build';
+interface Deltas {
+  uph: number;
+  leadMin: number;
+  costPerUnit: number;
+  buildCost: number;
+}
+interface Tried {
   name: string;
   reason: string;
-  ops: EditOp[];
-  status: 'evaluated' | 'invalid' | 'gated_out';
+  source: 'neon' | 'search';
+  outcome: 'kept' | 'simulated' | 'gated out' | 'rejected';
   errors?: string[];
   gate?: number;
-  repaired?: boolean;
-  spec?: FactorySpec;
-  deltas?: { uph: number; leadMin: number; costPerUnit: number; buildCost: number; forkliftM: number };
+  deltas?: Deltas;
 }
-interface Proposal {
+interface ImproveResult {
+  goalLabel: string;
   explanation: string;
-  candidates: Candidate[];
-  stats: { proposed: number; firstPassValid: number; validAfterRepair: number; gateError?: string; ms: { propose: number; gate: number; total: number } };
+  rounds: { n: number; tried: Tried[]; kept?: string; ms: number }[];
+  kept: { round: number; name: string; spec: FactorySpec }[];
+  deltas: Deltas;
+  meetsDemand: boolean;
+  stopped: string;
+  ms: number;
+}
+interface SandboxResult {
+  explanation: string;
+  candidates: { name: string; status: 'evaluated' | 'invalid' | 'gated_out'; spec?: FactorySpec; errors?: string[]; deltas?: Deltas & { forkliftM: number } }[];
 }
 
 const describeOp = (op: EditOp): string => {
   switch (op.op) {
     case 'move':
-      return `Move ${op.id} to ${op.x}, ${op.y}`;
+      return `Moved ${op.id} to ${op.x}, ${op.y}`;
     case 'rotate':
-      return `Rotate ${op.id} to ${op.rot}°`;
+      return `Turned ${op.id} to ${op.rot}°`;
     case 'add':
-      return `Add ${op.station.id} (${op.station.type})`;
+      return `Added ${op.station.id} (${op.station.type})`;
     case 'remove':
-      return `Remove ${op.id}`;
+      return `Removed ${op.id}`;
     case 'moveDock':
-      return `Move dock ${op.index} to the ${op.wall} wall at ${op.offset} m`;
+      return `Moved dock ${op.index} to the ${{ N: 'north', S: 'south', E: 'east', W: 'west' }[op.wall]} wall, ${op.offset} m along`;
     case 'setParam':
       return `Set ${op.path} to ${op.value}`;
   }
 };
 
-const PANEL = 392;
-type Tab = 'overview' | 'improve' | 'equipment' | 'versions';
+const PANEL = 380;
 
-function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'warn' | 'good' }) {
+/** True on screens too narrow for the panel to sit beside the floor. */
+function useNarrow() {
+  const query = '(max-width: 900px)';
+  const [narrow, setNarrow] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const m = window.matchMedia(query);
+    const on = () => setNarrow(m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  return narrow;
+}
+type Tab = 'overview' | 'improve' | 'equipment' | 'versions';
+const GOALS: { id: Goal; label: string }[] = [
+  { id: 'cost', label: 'Cost per unit' },
+  { id: 'lead', label: 'Lead time' },
+  { id: 'build', label: 'Build cost' },
+];
+
+function Stat({ label, value, unit, sub, tone }: { label: string; value: string; unit?: string; sub?: string; tone?: 'warn' }) {
   return (
     <div className={`stat ${tone ?? ''}`}>
-      <span className="eyebrow">{label}</span>
-      <b>{value}</b>
+      <span>{label}</span>
+      <b>
+        {value}
+        {unit && <small>{unit}</small>}
+      </b>
       {sub && <span>{sub}</span>}
+    </div>
+  );
+}
+
+function DeltaLine({ d }: { d: Deltas }) {
+  // a change that rounds to zero is shown as no change, without a sign or a colour
+  const part = (v: number, shown: string, unit: string, goodWhenNegative = true) => {
+    const zero = !/[1-9]/.test(shown);
+    return (
+      <span className={zero ? 'muted' : v < 0 === goodWhenNegative ? 'good' : 'warn'}>
+        {zero ? '' : v > 0 ? '+' : '−'}
+        {shown} {unit}
+      </span>
+    );
+  };
+  return (
+    <div className="deltas">
+      {part(d.leadMin, num(Math.abs(d.leadMin)), 'min lead')}
+      {part(d.costPerUnit, money(Math.abs(d.costPerUnit)), 'a unit')}
+      {part(d.buildCost, money(Math.abs(d.buildCost)), 'build')}
+      {part(d.uph, num(Math.abs(d.uph)), 'an hour', false)}
     </div>
   );
 }
@@ -62,11 +119,13 @@ function CompareModal({ versions, a, b, onPick, onClose }: { versions: Version[]
   const layers: Layers = { flow: true, routes: false, power: false, water: false, labels: false };
   return (
     <div className="scrim center" onClick={onClose}>
-      <div className="compare" onClick={(e) => e.stopPropagation()}>
+      <div className="compare" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Compare versions">
         <header>
-          <h2>Compare versions</h2>
-          <button className="ghost small" onClick={onClose}>
-            Close
+          <h2>
+            {a.id} against {b.id}
+          </h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">
+            <Icon name="x" />
           </button>
         </header>
         <div className="compare-views">
@@ -77,21 +136,21 @@ function CompareModal({ versions, a, b, onPick, onClose }: { versions: Version[]
             ] as const
           ).map(([k, v, ev]) => (
             <div key={k} className="compare-view">
-              <select value={v.id} onChange={(e) => onPick(k, e.target.value)} aria-label={`Version ${k.toUpperCase()}`}>
+              <select value={v.id} onChange={(e) => onPick(k, e.target.value)} aria-label={k === 'a' ? 'First version' : 'Second version'}>
                 {versions.map((x) => (
                   <option key={x.id} value={x.id}>
                     {x.id} · {x.label}
                   </option>
                 ))}
               </select>
-              <Scene spec={v.spec} routes={ev.ok ? ev.routes : null} layers={layers} bottleneck={v.metrics.sim.bottleneck.name} interactive={false} animate={false} />
+              <Scene spec={v.spec} routes={ev.ok ? ev.routes : null} layers={layers} interactive={false} animate={false} />
             </div>
           ))}
         </div>
         <table>
           <thead>
             <tr>
-              <th>Metric</th>
+              <th />
               <th>{a.id}</th>
               <th>{b.id}</th>
               <th>Change</th>
@@ -103,16 +162,22 @@ function CompareModal({ versions, a, b, onPick, onClose }: { versions: Version[]
                 <td>{r.label}</td>
                 <td>{r.unit === '$' ? money(r.a) : `${num(r.a, 2)} ${r.unit}`}</td>
                 <td>{r.unit === '$' ? money(r.b) : `${num(r.b, 2)} ${r.unit}`}</td>
-                <td className={r.better === null ? '' : r.better ? 'good' : 'warn'}>
-                  {r.delta > 0 ? '+' : r.delta < 0 ? '−' : ''}
-                  {r.unit === '$' ? money(Math.abs(r.delta)) : num(Math.abs(r.delta), 2)}
-                </td>
+                {(() => {
+                  const shown = r.unit === '$' ? money(Math.abs(r.delta)) : num(Math.abs(r.delta), 2);
+                  const zero = !/[1-9]/.test(shown);
+                  return (
+                    <td className={zero || r.better === null ? 'muted' : r.better ? 'good' : 'warn'}>
+                      {zero ? '' : r.delta > 0 ? '+' : '−'}
+                      {shown}
+                    </td>
+                  );
+                })()}
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="muted">
-          <b>Changed in {b.id}:</b> {b.diff.join(' · ') || 'nothing'}
+        <p className="muted small">
+          What changed in {b.id}: {b.diff.join('; ') || 'nothing'}.
         </p>
       </div>
     </div>
@@ -129,14 +194,18 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const [layers, setLayers] = useState<Layers>({ flow: true, routes: false, power: false, water: false, labels: true });
   const [tab, setTab] = useState<Tab>('overview');
   const [selected, setSelected] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; title: string; lines: string[] } | null>(null);
-  const [events, setEvents] = useState<TraceEvent[]>(project.trace);
   const [command, setCommand] = useState('');
   const [recording, setRecording] = useState(false);
-  const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [goal, setGoal] = useState<Goal>('cost');
+  const [mode, setMode] = useState<'improve' | 'sandbox' | null>(null);
+  const [improved, setImproved] = useState<(ImproveResult & { saved: string[] }) | null>(null);
+  const [sandbox, setSandbox] = useState<SandboxResult | null>(null);
   const [cmp, setCmp] = useState<{ a: string; b: string } | null>(null);
   const recorder = useRef<Recorder | null>(null);
+  const run = useRun();
+  const busy = run.busy;
+  const narrow = useNarrow();
 
   useEffect(() => {
     setDraft(current.spec);
@@ -151,20 +220,24 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const shown = preview ?? draft;
   const v1 = versions[0];
   const nextN = Math.max(...versions.map((v) => v.n)) + 1;
+  const hot = sim.bottleneck.utilisation >= 0.85;
 
-  const run = async (label: string, job: () => Promise<void>) => {
-    setBusy(label);
+  /** Run a streamed harness call; its steps land in the tracker live and in the project's run log after. */
+  const call = async <T,>(label: string, path: string, body: unknown): Promise<T | null> => {
     setNotice(null);
+    let events: TraceEvent[] = [];
     try {
-      await job();
+      const out = await run.run(label, (onEvent) => apiStream<T>(path, body, onEvent));
+      events = out.events;
+      return out.value;
     } catch (e) {
       const err = e as ApiError;
       setNotice({ tone: 'error', title: err.message, lines: err.lines ?? [] });
+      return null;
     } finally {
-      setBusy(null);
+      if (events.length) onChange({ trace: [...project.trace, ...events] });
     }
   };
-  const log = (e: TraceEvent) => setEvents((cur) => [...cur, e]);
 
   /** Every manual edit goes through here: apply the op, validate, accept or reject with the reasons. */
   const tryOp = (op: EditOp) => {
@@ -193,26 +266,21 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     setPreview(null);
   };
 
-  const save = (label = 'Edited layout') => {
+  const save = () => {
     if (!evaluation.ok || !dirty) return;
-    const v = makeVersion(draft, evaluation.metrics, current, nextN, label);
+    const v = makeVersion(draft, evaluation.metrics, current, nextN, 'Edited by hand');
     onChange({ versions: [...versions, v], currentId: v.id });
   };
 
-  const sendEdit = (payload: { text?: string; audio?: { mimeType: string; data: string } }) =>
-    run(payload.audio ? 'Hydrogen is listening' : 'Hydrogen is planning the edit', async () => {
-      const t = Date.now();
-      const out = await api<{ ops: EditOp[]; spec: FactorySpec; transcript: string; reason: string; attempts: unknown[] }>('/api/edit', { spec: draft, ...payload });
-      if (!out.ops.length) {
-        log({ stage: 'plan', actor: 'hydrogen', title: `No change for "${out.transcript}"`, detail: out.reason, ms: Date.now() - t, status: 'fail' });
-        return void setNotice({ tone: 'error', title: 'No change made', lines: [`“${out.transcript}”`, out.reason] });
-      }
-      setDraft(out.spec);
-      setRejected([]);
-      setCommand('');
-      log({ stage: 'plan', actor: 'hydrogen', title: `Edit: "${out.transcript}"`, detail: `${out.ops.length} op${out.ops.length > 1 ? 's' : ''}, valid after ${out.attempts.length} attempt${out.attempts.length > 1 ? 's' : ''}`, ms: Date.now() - t, status: out.attempts.length > 1 ? 'retry' : 'ok' });
-      setNotice({ tone: 'ok', title: `“${out.transcript}”`, lines: out.ops.map(describeOp) });
-    });
+  const sendEdit = async (payload: { text?: string; audio?: { mimeType: string; data: string } }) => {
+    const out = await call<{ ops: EditOp[]; spec: FactorySpec; transcript: string; reason: string }>(payload.audio ? 'Listening' : 'Planning the edit', '/api/edit', { spec: draft, ...payload });
+    if (!out) return;
+    if (!out.ops.length) return void setNotice({ tone: 'error', title: `Nothing changed for “${out.transcript}”`, lines: [out.reason] });
+    setDraft(out.spec);
+    setRejected([]);
+    setCommand('');
+    setNotice({ tone: 'ok', title: `“${out.transcript}”`, lines: out.ops.map(describeOp) });
+  };
 
   const toggleMic = async () => {
     if (recording && recorder.current) {
@@ -234,24 +302,44 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     }
   };
 
-  const propose = (path: '/api/optimise' | '/api/deep-search', label: string, actor: TraceEvent['actor']) =>
-    run(label, async () => {
-      const out = await api<Proposal>(path, { spec: draft });
-      setProposal(out);
-      setTab('improve');
-      const ok = out.candidates.filter((c) => c.status !== 'invalid').length;
-      log({ stage: 'improve', actor, title: actor === 'neon' ? 'Neon proposed improvements' : 'Agent searched in its sandbox', detail: `${out.stats.proposed} proposed, ${ok} valid and simulated`, ms: out.stats.ms.total, status: 'ok' });
-    });
+  /** The agent loop. Each change it keeps becomes a version, so the timeline shows how it got there. */
+  const improve = async () => {
+    setMode('improve');
+    setImproved(null);
+    setSandbox(null);
+    const out = await call<ImproveResult>('Starting', '/api/improve', { spec: draft, goal });
+    if (!out) return;
+    const added: Version[] = [];
+    let parent = current;
+    let n = nextN;
+    if (dirty && evaluation.ok) {
+      parent = makeVersion(draft, evaluation.metrics, current, n++, 'Edited by hand');
+      added.push(parent);
+    }
+    for (const k of out.kept) {
+      const ev = evaluate(k.spec);
+      if (!ev.ok) continue; // the server validated it; this is belt and braces
+      parent = makeVersion(k.spec, ev.metrics, parent, n++, `Agent, round ${k.round}: ${k.name}`);
+      added.push(parent);
+    }
+    setImproved({ ...out, saved: added.filter((v) => v.label.startsWith('Agent')).map((v) => v.id) });
+    if (added.length) onChange({ versions: [...versions, ...added], currentId: parent.id });
+  };
 
-  const applyCandidate = (c: Candidate) => {
-    if (!c.spec) return;
-    const errs = validate(c.spec);
+  const deepSearch = async () => {
+    setMode('sandbox');
+    setImproved(null);
+    setSandbox(null);
+    const out = await call<SandboxResult>('Starting the sandbox', '/api/deep-search', { spec: draft });
+    if (out) setSandbox(out);
+  };
+
+  const applySpec = (name: string, spec: FactorySpec) => {
+    const errs = validate(spec);
     if (errs.length) return void setRejected(errs);
-    // keep display fields the model never sees
-    const withLook: FactorySpec = { ...c.spec, stations: c.spec.stations.map((s) => ({ ...draft.stations.find((d) => d.id === s.id), ...s })) };
-    setDraft(withLook);
+    setDraft(spec);
     setRejected([]);
-    setNotice({ tone: 'ok', title: `Applied “${c.name}” to the draft`, lines: c.ops.map(describeOp) });
+    setNotice({ tone: 'ok', title: `Applied “${name}” to the draft`, lines: ['Save it as a version to keep it.'] });
   };
 
   const liveErrors = preview ? previewErrors : rejected;
@@ -259,7 +347,11 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const dLead = (v1.metrics.sim.leadTimeSec.median - sim.leadTimeSec.median) / 60;
   const dUnit = v1.metrics.cost.costPerUnit - metrics.cost.costPerUnit;
   const dBuild = v1.metrics.cost.buildCost - metrics.cost.buildCost;
-  const saved = (v: number, f: (x: number) => string) => `${f(Math.abs(v))} ${v >= 0 ? 'less' : 'more'}`;
+  const versus = (v: number, f: (x: number) => string) => (
+    <b className={Math.abs(v) < 1e-9 ? '' : v > 0 ? 'good' : 'warn'}>
+      {f(Math.abs(v))} {v >= 0 ? 'less' : 'more'}
+    </b>
+  );
   const bill = useMemo(() => {
     const map = new Map<string, { name: string; qty: number; price: number; checkoutUrl?: string; listingUrl?: string }>();
     for (const s of draft.stations) {
@@ -272,15 +364,17 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   }, [draft]);
   const cmpA = cmp && versions.find((v) => v.id === cmp.a);
   const cmpB = cmp && versions.find((v) => v.id === cmp.b);
+  const outcomeIcon = { kept: 'check', simulated: 'minus', 'gated out': 'minus', rejected: 'x' } as const;
 
   return (
     <div className="page workspace">
       <TopBar
         onHome={onHome}
+        log={project.trace}
         crumbs={[{ label: 'Brief' }, { label: 'Equipment', onClick: onPlan }, { label: 'Simulation', active: true }]}
         right={
-          <a className="link" href="/eval/index.html" target="_blank" rel="noreferrer">
-            Eval results
+          <a href="/eval/index.html" target="_blank" rel="noreferrer">
+            Eval
           </a>
         }
       />
@@ -290,9 +384,9 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           routes={!preview && evaluation.ok ? evaluation.routes : null}
           layers={layers}
           badIds={previewErrors.flatMap((e) => e.ids)}
-          bottleneck={sim.bottleneck.utilisation >= 0.85 ? sim.bottleneck.name : undefined}
+          bottleneck={hot ? sim.bottleneck.name : undefined}
           selectedId={selected}
-          insetRight={PANEL + 24}
+          insetRight={narrow ? 0 : PANEL + 14}
           onSelect={setSelected}
           onDrag={onDrag}
           onDrop={onDrop}
@@ -300,21 +394,18 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
       </div>
 
       <div className="stage-title">
-        <span className="eyebrow">
-          {current.id}
-          {dirty ? ' · unsaved draft' : ''} · {draft.floor.width} × {draft.floor.depth} m
-        </span>
         <h1>{project.name}</h1>
         <p>
-          {num(sim.unitsPerHour.median)} units / h against a demand of {draft.demandPerHour}
+          {current.id}
+          {dirty ? ', with unsaved changes' : ''} · {draft.floor.width} × {draft.floor.depth} m · {draft.stations.length} stations
         </p>
       </div>
 
-      <div className="layerbar" role="group" aria-label="Layers">
+      <div className="layerbar" role="group" aria-label="Show on the floor">
         {(
           [
             ['flow', 'Flow'],
-            ['routes', 'All routes'],
+            ['routes', 'Routes'],
             ['power', 'Power'],
             ['water', 'Water'],
             ['labels', 'Labels'],
@@ -326,11 +417,12 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
         ))}
       </div>
 
-      <aside className="panel" style={{ width: PANEL }}>
+      <aside className="panel" style={narrow ? undefined : { width: PANEL }}>
         <nav className="tabs" role="tablist">
           {(['overview', 'improve', 'equipment', 'versions'] as const).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
-              {t === 'versions' ? `Versions ${versions.length}` : t[0].toUpperCase() + t.slice(1)}
+              {t[0].toUpperCase() + t.slice(1)}
+              {t === 'versions' && <em>{versions.length}</em>}
             </button>
           ))}
         </nav>
@@ -338,44 +430,50 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
         <div className="panel-body">
           {tab === 'overview' && (
             <>
-              <div className="stats">
-                <Stat label="Throughput" value={`${num(sim.unitsPerHour.median)} / h`} sub={`${num(sim.unitsPerHour.low)} to ${num(sim.unitsPerHour.high)} across 30 shifts`} tone={sim.unitsPerHour.median < draft.demandPerHour * 0.95 ? 'warn' : undefined} />
-                <Stat label="Lead time" value={`${num(sim.leadTimeSec.median / 60)} min`} sub={`${num(sim.wip.median)} units in progress`} />
-                <Stat label="Cost per unit" value={money(metrics.cost.costPerUnit)} sub={`${num(metrics.cost.kwhPerUnit, 3)} kWh per unit`} />
-                <Stat label="Build cost" value={money(metrics.cost.buildCost)} sub={`${money(metrics.cost.utilityRunCost)} of it utility runs`} />
+              <div className="section">
+                <div className="stats">
+                  <Stat
+                    label="Throughput"
+                    value={num(sim.unitsPerHour.median)}
+                    unit="an hour"
+                    sub={sim.unitsPerHour.median < draft.demandPerHour * 0.97 ? `${num(draft.demandPerHour - sim.unitsPerHour.median)} short of demand` : `demand is ${draft.demandPerHour}`}
+                    tone={sim.unitsPerHour.median < draft.demandPerHour * 0.97 ? 'warn' : undefined}
+                  />
+                  <Stat label="Lead time" value={num(sim.leadTimeSec.median / 60)} unit="min" sub={`${num(sim.wip.median)} units in progress`} />
+                  <Stat label="Cost per unit" value={money(metrics.cost.costPerUnit)} sub={`${num(metrics.cost.kwhPerUnit, 2)} kWh a unit`} />
+                  <Stat label="Build cost" value={money(metrics.cost.buildCost)} sub={`${money(metrics.cost.utilityRunCost)} is power and water runs`} />
+                </div>
+                {(versions.length > 1 || dirty) && (
+                  <p className="say">
+                    Against v1: lead time {versus(dLead, (x) => `${num(x)} min`)}, cost per unit {versus(dUnit, money)}, build cost {versus(dBuild, money)}.
+                  </p>
+                )}
               </div>
-              <div className="card flat">
-                <span className="eyebrow">{sim.bottleneck.utilisation >= 0.85 ? 'Bottleneck' : 'Busiest resource'}</span>
-                <p className="callout">
-                  <b className={sim.bottleneck.utilisation > 0.85 ? 'warn' : ''}>{sim.bottleneck.name === 'forklift' ? 'The forklift' : sim.bottleneck.name}</b> is busy {num(sim.bottleneck.utilisation * 100, 0)}% of the time
-                  {sim.bottleneck.name === 'forklift' ? `, carrying each unit ${num(metrics.routeTotals.forkliftM, 0)} m.` : '.'}
-                </p>
+              <div className="section">
+                <h3>How busy each step is</h3>
                 <div className="utils">
                   {Object.entries(sim.utilisation).map(([name, u]) => (
                     <div key={name} className="util">
                       <span>{name}</span>
                       <div className="bar">
-                        <i style={{ width: `${Math.min(100, u * 100)}%` }} className={u > 0.85 ? 'hot' : ''} />
+                        <i style={{ width: `${Math.min(100, u * 100)}%` }} className={u >= 0.85 ? 'hot' : ''} />
                       </div>
                       <em>{num(u * 100, 0)}%</em>
                     </div>
                   ))}
                 </div>
-              </div>
-              {versions.length > 1 || dirty ? (
-                <div className="card flat">
-                  <span className="eyebrow">Against v1</span>
-                  <p className="callout">
-                    Lead time <b className={dLead >= 0 ? 'good' : 'warn'}>{saved(dLead, (x) => `${num(x)} min`)}</b>, cost per unit <b className={dUnit >= 0 ? 'good' : 'warn'}>{saved(dUnit, money)}</b>, build cost{' '}
-                    <b className={dBuild >= 0 ? 'good' : 'warn'}>{saved(dBuild, money)}</b>.
+                {hot && (
+                  <p className="say">
+                    <b className="warn">{sim.bottleneck.name === 'forklift' ? 'The forklift' : sim.bottleneck.name[0].toUpperCase() + sim.bottleneck.name.slice(1)}</b> is the bottleneck
+                    {sim.bottleneck.name === 'forklift' ? `: it carries each unit ${num(metrics.routeTotals.forkliftM, 0)} m.` : '.'}
                   </p>
-                </div>
-              ) : null}
-              <div className="card flat">
-                <span className="eyebrow">What if</span>
+                )}
+              </div>
+              <div className="section">
+                <h3>What if</h3>
                 <label className="slider">
                   <span>
-                    Demand <b>{draft.demandPerHour} / h</b>
+                    Demand <b>{draft.demandPerHour} an hour</b>
                   </span>
                   <input type="range" min={5} max={Math.max(80, current.spec.demandPerHour * 2)} step={1} value={draft.demandPerHour} onChange={(e) => tryOp({ op: 'setParam', path: 'demandPerHour', value: Number(e.target.value) })} />
                 </label>
@@ -387,13 +485,12 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                 </label>
               </div>
               {sel && (
-                <div className="card flat">
-                  <span className="eyebrow">Selected · {sel.id}</span>
-                  <p className="callout">
+                <div className="section">
+                  <h3>Selected</h3>
+                  <p className="say">
                     <b>{sel.name ?? sel.type}</b>
-                  </p>
-                  <p className="muted">
-                    {sel.w} × {sel.d} m · {sel.cycleTimeSec} s per unit · {money(sel.price)}
+                    <br />
+                    {sel.w} × {sel.d} m · {sel.cycleTimeSec} s a unit · {money(sel.price)}
                     {sel.listingUrl && (
                       <>
                         {' · '}
@@ -404,17 +501,17 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                     )}
                   </p>
                   <div className="row">
-                    <button className="ghost small" onClick={() => tryOp({ op: 'rotate', id: sel.id, rot: sel.rot === 0 ? 90 : 0 })}>
-                      Rotate
+                    <button className="ghost sm" onClick={() => tryOp({ op: 'rotate', id: sel.id, rot: sel.rot === 0 ? 90 : 0 })}>
+                      <Icon name="rotate" size={14} /> Turn
                     </button>
                     <button
-                      className="ghost small"
+                      className="ghost sm"
                       onClick={() => {
                         tryOp({ op: 'remove', id: sel.id });
                         setSelected(null);
                       }}
                     >
-                      Remove
+                      <Icon name="trash" size={14} /> Remove
                     </button>
                   </div>
                 </div>
@@ -424,145 +521,186 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
 
           {tab === 'improve' && (
             <>
-              <div className="card flat">
-                <span className="eyebrow">Ask for improvements</span>
-                <p className="muted">Proposals are checked against every layout rule and simulated before you see them. Nothing changes until you apply one.</p>
+              <div className="section">
+                <h3>Meet demand, then go for the lowest</h3>
+                <div className="segmented" role="radiogroup" aria-label="Goal">
+                  {GOALS.map((g) => (
+                    <button key={g.id} role="radio" aria-checked={goal === g.id} className={goal === g.id ? 'on' : ''} disabled={busy} onClick={() => setGoal(g.id)}>
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="row">
-                  <button className="primary" disabled={!!busy} onClick={() => void propose('/api/optimise', 'Neon is proposing improvements', 'neon')}>
-                    Ask Neon
+                  <button className="primary" disabled={busy} onClick={() => void improve()}>
+                    Improve this layout
                   </button>
-                  <button className="ghost" disabled={!!busy} onClick={() => void propose('/api/deep-search', 'A managed agent is searching in its sandbox', 'agent')}>
-                    Deep search
+                  <button className="text" disabled={busy} onClick={() => void deepSearch()} title="A managed agent runs eight seeded searches in a remote sandbox">
+                    Search in a sandbox
                   </button>
                 </div>
               </div>
-              {proposal && (
-                <>
-                  <p className="callout">{proposal.explanation}</p>
-                  <span className="fine">
-                    {proposal.stats.proposed} proposed · {proposal.stats.validAfterRepair} valid · {(proposal.stats.ms.total / 1000).toFixed(0)} s
-                    {proposal.stats.gateError ? ` · gate failed: ${proposal.stats.gateError}` : ''}
-                  </span>
-                  {proposal.candidates.map((c, i) => (
-                    <div key={i} className={`cand ${c.status}`}>
-                      <div className="cand-head">
-                        <b>{c.name}</b>
-                        {c.gate !== undefined && <span className="chip" title="Decisions API score before simulation">gate {Math.round(c.gate * 100)}%</span>}
+
+              {busy && mode && (
+                <div className="section">
+                  <div className="live">
+                    <span className="spinner ink" />
+                    {run.live ?? 'Working'}
+                  </div>
+                  {run.events.map((e, i) => (
+                    <div key={i} className={`tried ${e.status === 'fail' ? 'rejected' : /: kept “/.test(e.title) ? 'kept' : ''}`}>
+                      <Icon name={e.status === 'fail' ? 'x' : 'check'} size={14} />
+                      <div>
+                        <b>{e.title}</b>
+                        {e.detail && <span>{e.detail}</span>}
                       </div>
-                      <span className="muted">{c.reason}</span>
-                      {c.deltas && (
-                        <div className="deltas">
-                          <span className={c.deltas.leadMin < 0 ? 'good' : 'warn'}>
-                            {c.deltas.leadMin > 0 ? '+' : '−'}
-                            {num(Math.abs(c.deltas.leadMin))} min lead
-                          </span>
-                          <span className={c.deltas.costPerUnit <= 0 ? 'good' : 'warn'}>
-                            {c.deltas.costPerUnit > 0 ? '+' : '−'}
-                            {money(Math.abs(c.deltas.costPerUnit))} / unit
-                          </span>
-                          <span className={c.deltas.buildCost <= 0 ? 'good' : 'warn'}>
-                            {c.deltas.buildCost > 0 ? '+' : '−'}
-                            {money(Math.abs(c.deltas.buildCost))} build
-                          </span>
-                          <span className={c.deltas.uph >= -0.3 ? '' : 'warn'}>
-                            {c.deltas.uph >= 0 ? '+' : '−'}
-                            {num(Math.abs(c.deltas.uph))} / h
-                          </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!busy && improved && (
+                <>
+                  <div className="section">
+                    <p className="say">
+                      {improved.kept.length ? (
+                        <>
+                          Kept <b>{improved.kept.length}</b> change{improved.kept.length > 1 ? 's' : ''} over {improved.rounds.length} rounds, saved as {improved.saved.join(' and ')}. Stopped because {improved.stopped}.
+                        </>
+                      ) : (
+                        <>Nothing beat the layout you have. Stopped because {improved.stopped}.</>
+                      )}
+                      {!improved.meetsDemand && <b className="warn"> It still falls short of demand.</b>}
+                    </p>
+                    {improved.kept.length > 0 && <DeltaLine d={improved.deltas} />}
+                    {improved.explanation && <p className="muted small">{improved.explanation}</p>}
+                  </div>
+                  {improved.rounds.map((r) => (
+                    <div key={r.n} className="section round">
+                      <header>
+                        <b>Round {r.n}</b>
+                        <span className="muted small">{(r.ms / 1000).toFixed(0)} s</span>
+                      </header>
+                      {r.tried.map((t, i) => (
+                        <div key={i} className={`tried ${t.outcome === 'kept' ? 'kept' : t.outcome === 'rejected' ? 'rejected' : ''}`}>
+                          <Icon name={outcomeIcon[t.outcome]} size={14} />
+                          <div>
+                            <b>
+                              {t.name}
+                              {t.outcome === 'kept' ? ' · kept' : ''}
+                            </b>
+                            <span>
+                              {t.source === 'search' ? 'Search' : 'Neon'}
+                              {t.gate !== undefined ? ` · pre-check ${Math.round(t.gate * 100)}%` : ''}
+                              {t.outcome === 'gated out' ? ' · not simulated' : ''}
+                              {t.outcome === 'rejected' ? ` · broke a rule: ${(t.errors ?? [])[0] ?? ''}` : ''}
+                            </span>
+                            {t.deltas && <DeltaLine d={t.deltas} />}
+                          </div>
                         </div>
-                      )}
-                      {c.status === 'invalid' && <span className="warn">Rejected by the layout rules: {(c.errors ?? []).slice(0, 2).join('; ')}</span>}
-                      {c.status === 'gated_out' && <span className="fine">Ranked below the cut by the pre-simulation gate; simulated anyway so you can judge the gate.</span>}
-                      {c.repaired && <span className="fine">First attempt broke a rule; this is the repaired version.</span>}
-                      {c.spec && (
-                        <button className="ghost small" disabled={!!busy} onClick={() => applyCandidate(c)}>
-                          Apply to draft
-                        </button>
-                      )}
+                      ))}
                     </div>
                   ))}
                 </>
+              )}
+
+              {!busy && sandbox && (
+                <div className="section round">
+                  <p className="muted small">{sandbox.explanation}</p>
+                  {sandbox.candidates.map((c, i) => (
+                    <div key={i} className={`tried ${c.status === 'invalid' ? 'rejected' : ''}`}>
+                      <Icon name={c.status === 'invalid' ? 'x' : 'minus'} size={14} />
+                      <div>
+                        <b>{c.name}</b>
+                        {c.deltas && <DeltaLine d={c.deltas} />}
+                        {c.status === 'invalid' && <span>Broke a rule: {(c.errors ?? [])[0]}</span>}
+                        {c.spec && (
+                          <div className="row" style={{ marginTop: 4 }}>
+                            <button className="ghost sm" onClick={() => applySpec(c.name, c.spec!)}>
+                              Apply to draft
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </>
           )}
 
           {tab === 'equipment' && (
-            <>
-              <div className="card flat">
-                <div className="cand-head">
-                  <span className="eyebrow">Bill of equipment</span>
-                  <b>{money(bill.reduce((t, r) => t + r.qty * r.price, 0))}</b>
+            <div className="section">
+              {bill.map((r, i) => (
+                <div key={i} className="bill-row">
+                  <span>
+                    {r.qty} × {r.name}
+                  </span>
+                  <span>{money(r.qty * r.price)}</span>
+                  {r.checkoutUrl || r.listingUrl ? (
+                    <a className="small" href={r.checkoutUrl ? r.checkoutUrl.replace(/:1(?=\?|$)/, `:${r.qty}`) : r.listingUrl} target="_blank" rel="noreferrer">
+                      {r.checkoutUrl ? 'Buy' : 'Listing'}
+                    </a>
+                  ) : (
+                    <span />
+                  )}
                 </div>
-                {bill.map((r, i) => (
-                  <div key={i} className="bill-row">
-                    <span>
-                      <b>{r.qty} ×</b> {r.name}
-                    </span>
-                    <span>{money(r.qty * r.price)}</span>
-                    {(r.checkoutUrl || r.listingUrl) && (
-                      <a href={r.checkoutUrl ? r.checkoutUrl.replace(/:1(?=\?|$)/, `:${r.qty}`) : r.listingUrl} target="_blank" rel="noreferrer">
-                        {r.checkoutUrl ? 'Checkout' : 'Listing'}
-                      </a>
-                    )}
-                  </div>
-                ))}
-                <p className="fine">Items picked from Shop keep their seller's checkout link. Nothing is ordered from here.</p>
+              ))}
+              <div className="bill-row">
+                <b>Total</b>
+                <b>{money(bill.reduce((t, r) => t + r.qty * r.price, 0))}</b>
+                <span />
               </div>
-              <button className="ghost" onClick={onPlan}>
-                Change equipment
-              </button>
-            </>
+              <div className="row">
+                <button className="ghost sm" onClick={onPlan}>
+                  Change equipment
+                </button>
+              </div>
+            </div>
           )}
 
           {tab === 'versions' && (
             <>
-              <div className="versions">
-                {versions.map((v) => (
-                  <button key={v.id} className={`version${v.id === current.id ? ' on' : ''}`} onClick={() => onChange({ currentId: v.id })} title={v.diff.join('\n')}>
-                    <span className="version-id">{v.id}</span>
-                    <span className="version-body">
-                      <b>{v.label}</b>
-                      <span>
-                        {num(v.metrics.sim.unitsPerHour.median)} / h · {num(v.metrics.sim.leadTimeSec.median / 60)} min · {money(v.metrics.cost.costPerUnit)} per unit
-                      </span>
+              {versions.map((v) => (
+                <button key={v.id} className={`version${v.id === current.id ? ' on' : ''}`} onClick={() => onChange({ currentId: v.id })} title={v.diff.join('\n')}>
+                  <span className="version-id">{v.id}</span>
+                  <span className="version-body">
+                    <b>{v.label}</b>
+                    <span>
+                      {num(v.metrics.sim.unitsPerHour.median)} an hour · {num(v.metrics.sim.leadTimeSec.median / 60)} min · {money(v.metrics.cost.costPerUnit)} a unit
                     </span>
+                  </span>
+                </button>
+              ))}
+              <div className="section">
+                <div className="row">
+                  <button className="ghost sm" disabled={versions.length < 2} onClick={() => setCmp({ a: v1.id, b: current.id === v1.id ? versions[versions.length - 1].id : current.id })}>
+                    Compare two versions
                   </button>
-                ))}
-                {dirty && <div className="version draft">Unsaved draft</div>}
-              </div>
-              <div className="row">
-                <button className="primary" disabled={!dirty} onClick={() => save()}>
-                  Save as v{nextN}
-                </button>
-                <button className="ghost" disabled={!dirty} onClick={() => setDraft(current.spec)}>
-                  Discard draft
-                </button>
-                <button className="ghost" disabled={versions.length < 2} onClick={() => setCmp({ a: v1.id, b: current.id === v1.id ? versions[versions.length - 1].id : current.id })}>
-                  Compare
-                </button>
+                </div>
               </div>
             </>
           )}
         </div>
 
-        {dirty && tab !== 'versions' && (
+        {dirty && (
           <div className="panel-foot">
-            <span>Unsaved draft</span>
-            <button className="ghost small" onClick={() => setDraft(current.spec)}>
+            <span>Unsaved changes</span>
+            <button className="text sm" onClick={() => setDraft(current.spec)}>
               Discard
             </button>
-            <button className="primary small" onClick={() => save()}>
+            <button className="primary sm" onClick={save}>
               Save as v{nextN}
             </button>
           </div>
         )}
       </aside>
 
-      <div className="dock" style={{ right: PANEL + 24 }}>
+      <div className="dock" style={narrow ? undefined : { right: PANEL + 40 }}>
         {liveErrors.length > 0 && (
-          <Notice tone="error" title={preview ? 'Not valid here' : 'That change was rejected'} lines={liveErrors.slice(0, 3).map((e) => e.message)} onClose={preview ? undefined : () => setRejected([])} />
+          <Notice tone="error" title={preview ? 'It cannot go here' : 'That change breaks a layout rule'} lines={liveErrors.slice(0, 3).map((e) => e.message)} onClose={preview ? undefined : () => setRejected([])} />
         )}
         {notice && !liveErrors.length && <Notice tone={notice.tone} title={notice.title} lines={notice.lines} onClose={() => setNotice(null)} />}
-        <Tracker events={events} running={busy} />
+        <RunStatus state={run} />
         <form
           className="prompt"
           onSubmit={(e) => {
@@ -570,12 +708,12 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
             if (command.trim()) void sendEdit({ text: command.trim() });
           }}
         >
-          <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="Tell the floor what to change: “move shipping to the south wall”" disabled={!!busy} aria-label="Edit the layout in words" />
-          <button type="button" className={`ghost${recording ? ' rec' : ''}`} disabled={!!busy && !recording} onClick={() => void toggleMic()}>
-            {recording ? 'Stop' : 'Speak'}
+          <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="Say what to change, like move shipping to the south wall" disabled={busy} aria-label="Change the layout in words" />
+          <button type="button" className={recording ? 'ghost rec sm' : 'icon-btn'} disabled={busy && !recording} onClick={() => void toggleMic()} aria-label={recording ? 'Stop recording and apply' : 'Speak a change'} title={recording ? 'Stop and apply' : 'Speak a change'}>
+            <Icon name={recording ? 'stop' : 'mic'} /> {recording ? 'Stop' : ''}
           </button>
-          <button className="primary" disabled={!!busy || !command.trim()}>
-            Apply
+          <button className="primary" disabled={busy || !command.trim()} aria-label="Apply the change">
+            <Icon name="arrowUp" />
           </button>
         </form>
       </div>

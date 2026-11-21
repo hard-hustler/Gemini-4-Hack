@@ -93,8 +93,11 @@ export interface TraceEvent {
   title: string;
   detail?: string;
   ms: number;
-  status: 'ok' | 'retry' | 'fail';
+  /** 'running' is only ever streamed: it says what is in flight and is replaced by the next event */
+  status: 'ok' | 'retry' | 'fail' | 'running';
 }
+
+export type Emit = (e: TraceEvent) => void;
 
 export interface PlanResult {
   requirements: Requirements;

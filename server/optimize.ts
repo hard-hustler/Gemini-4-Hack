@@ -9,7 +9,7 @@ import { applyOps, type EditOp, type FactorySpec } from '../src/spec';
 import { decide, interact, MODELS, type Question, type Step } from './gemini';
 import { errorText, GEOMETRY_RULES, opsSchema, toOps } from './pipeline';
 
-const proposalSchema = {
+export const proposalSchema = {
   type: 'object',
   properties: {
     explanation: { type: 'string', description: 'two sentences: what the bottleneck is and why, in plain words, using the numbers given' },
@@ -46,7 +46,7 @@ export interface Candidate {
   deltas?: { uph: number; leadMin: number; costPerUnit: number; buildCost: number; forkliftM: number };
 }
 
-function situation(spec: FactorySpec, m: Metrics): string {
+export function situation(spec: FactorySpec, m: Metrics): string {
   const r = route(spec);
   const legs = ['dock in', ...spec.routing, 'dock out'];
   return [

@@ -5,6 +5,7 @@ import { buildLayout } from '../engines/place';
 import { evaluate, makeVersion } from '../engines/versions';
 import { money, num, type Project } from '../store';
 import { TopBar } from '../ui/common';
+import { Icon } from '../ui/icons';
 import { Scene } from '../ui/Scene';
 
 const step = (type: string, label: string, count: number): ProcessStep => ({ type, label, count, cycleTimeSec: 0, operators: 1, powerKw: 0, needsWater: false, w: 2, d: 1 });
@@ -23,7 +24,7 @@ export function demoProject(): Project {
     powerWall: 'N',
     waterWall: 'S',
     sketch: [],
-    assumptions: ['Built-in demo project: nothing here came from a model.'],
+    assumptions: ['This is the built-in demo. Nothing in it came from a model.'],
   };
   const equipment: EquipmentLine[] = steps.map((s) => ({ stepType: s.type, label: s.label, qty: s.count, item: pickItem(s) }));
   const placed = buildLayout(requirements, equipment, { polish: false });
@@ -47,92 +48,63 @@ export function Landing({ projects, onNew, onOpen, onDemo, onDelete }: { project
         onHome={() => undefined}
         right={
           <>
-            <a className="link" href="/eval/index.html" target="_blank" rel="noreferrer">
-              Eval results
+            <a href="/eval/index.html" target="_blank" rel="noreferrer">
+              Eval
             </a>
-            <button className="primary" onClick={onNew}>
+            <button className="ghost" onClick={onNew}>
               New project
             </button>
           </>
         }
       />
-      <section className="hero">
-        <div className="hero-copy">
-          <span className="eyebrow">Factory planning, simulated</span>
-          <h1>
-            Test the factory
-            <br />
-            <em>before you build it.</em>
-          </h1>
-          <p>Describe the line, photograph a floor sketch or say it out loud. Dry Run plans the equipment, lays it out and simulates thirty shifts, so every version is compared on throughput and cost before anything is bought.</p>
-          <div className="hero-actions">
-            <button className="primary large" onClick={onNew}>
-              Start a project
-            </button>
-            <button className="ghost large" onClick={onDemo}>
-              Open the demo floor
-            </button>
+      <main className="landing">
+        <section className="hero">
+          <div className="hero-copy">
+            <h1>Test the factory before you build it.</h1>
+            <p>Describe the line, or photograph a sketch of the floor. Dry Run picks the equipment, lays it out and simulates it, so you can compare layouts on throughput and cost before you buy anything.</p>
+            <div className="row">
+              <button className="primary lg" onClick={onNew}>
+                Start a project
+              </button>
+              <button className="text lg" onClick={onDemo}>
+                Open the demo floor <Icon name="arrowRight" />
+              </button>
+            </div>
           </div>
-          <div className="tracker static">
-            {['Plan', 'Check', 'Place', 'Simulate'].map((s) => (
-              <span key={s} className="tracker-step ok">
-                <i>✓</i>
-                {s}
-              </span>
-            ))}
-          </div>
-        </div>
-        <div className="hero-stage">
-          <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false }} interactive={false} />
-          <div className="float-card a">
-            <span className="eyebrow">Throughput</span>
-            <b>{num(hero.metrics.sim.unitsPerHour.median)} units / h</b>
-          </div>
-          <div className="float-card b">
-            <span className="eyebrow">Cost per unit</span>
-            <b>{money(hero.metrics.cost.costPerUnit)}</b>
-          </div>
-        </div>
-      </section>
-
-      <section className="how">
-        {[
-          ['01', 'Brief', 'A prompt, a sketch photo, a PDF or a voice note. One model reads it into a plan; a second, independent check confirms every step is really in your brief.'],
-          ['02', 'Equipment', 'Review the machines the plan will use. Swap any of them for a real listing and its price and footprint come with it.'],
-          ['03', 'Simulation', 'A layout that passes every rule, simulated over thirty shifts. Drag, speak or ask for improvements, and compare versions side by side.'],
-        ].map(([n, t, d]) => (
-          <div key={n} className="how-card">
-            <span className="eyebrow">{n}</span>
-            <h3>{t}</h3>
-            <p>{d}</p>
-          </div>
-        ))}
-      </section>
-
-      {projects.length > 0 && (
-        <section className="recent">
-          <span className="eyebrow">Your projects</span>
-          <div className="recent-grid">
-            {projects.map((p) => {
-              const v = p.versions[p.versions.length - 1];
-              return (
-                <div key={p.id} className="project-card">
-                  <button className="project-open" onClick={() => onOpen(p)}>
-                    <h3>{p.name}</h3>
-                    <span>
-                      {p.requirements.floor.width} × {p.requirements.floor.depth} m · {p.equipment.reduce((t, l) => t + l.qty, 0)} stations
-                    </span>
-                    <span>{v ? `${p.versions.length} version${p.versions.length > 1 ? 's' : ''} · ${num(v.metrics.sim.unitsPerHour.median)} units/h` : 'Plan ready, no layout yet'}</span>
-                  </button>
-                  <button className="ghost small" onClick={() => onDelete(p.id)} aria-label={`Delete ${p.name}`}>
-                    Delete
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+          <figure>
+            <div className="hero-stage">
+              <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false }} interactive={false} />
+            </div>
+            <figcaption>
+              The demo floor, simulated live in your browser: {num(hero.metrics.sim.unitsPerHour.median)} units an hour at {money(hero.metrics.cost.costPerUnit)} a unit.
+            </figcaption>
+          </figure>
         </section>
-      )}
+
+        {projects.length > 0 && (
+          <section className="projects">
+            <h2>Projects</h2>
+            <div className="project-list">
+              {projects.map((p) => {
+                const v = p.versions[p.versions.length - 1];
+                return (
+                  <div key={p.id} className="project-row">
+                    <button onClick={() => onOpen(p)}>{p.name}</button>
+                    <span>
+                      {p.requirements.floor.width} × {p.requirements.floor.depth} m
+                    </span>
+                    <span>{p.equipment.reduce((t, l) => t + l.qty, 0)} stations</span>
+                    <span>{v ? `v${p.versions.length} · ${num(v.metrics.sim.unitsPerHour.median)} / h` : 'No layout yet'}</span>
+                    <button className="icon-btn" onClick={() => onDelete(p.id)} aria-label={`Delete ${p.name}`} title="Delete project">
+                      <Icon name="trash" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+      </main>
     </div>
   );
 }

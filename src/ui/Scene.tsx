@@ -295,8 +295,8 @@ function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number
   const { width, depth } = spec.floor;
   useEffect(() => {
     const free = Math.max(320, size.width - insetRight);
-    const span = (width + depth) * 0.86;
-    const zoom = Math.min(free / span, size.height / (span * 0.95));
+    // the floor's on-screen width is (w + d) / sqrt(2); its height is about 0.47 of (w + d) at this camera angle, plus equipment
+    const zoom = Math.min(free / ((width + depth) * 0.86), size.height / ((width + depth) * 0.7));
     // on screen, "right" is world (1, 0, -1) / sqrt(2) for this camera; shift the target so the floor sits in the free area
     const shift = insetRight / 2 / zoom / Math.SQRT2;
     const target = new THREE.Vector3(shift, 0, -shift);
@@ -375,7 +375,7 @@ export function Scene(props: SceneProps) {
     return () => clearTimeout(t);
   }, []);
   return (
-    <Canvas shadows orthographic camera={{ position: [40, 50, 40], zoom: 30, near: -200, far: 600 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
+    <Canvas flat shadows orthographic camera={{ position: [40, 50, 40], zoom: 30, near: -200, far: 600 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
       <World {...props} />
     </Canvas>
   );

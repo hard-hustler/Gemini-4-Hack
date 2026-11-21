@@ -94,7 +94,7 @@ Reply with only the raw output of step 3 (one JSON object per line), no commenta
   const valid = candidates.filter((c) => c.status === 'evaluated').length;
   const total = Date.now() - started;
   return {
-    explanation: `A managed agent cloned this repo into a remote sandbox and ran ${RUNS} seeded layout searches in parallel (${ITERS} steps each, every step through validate and the simulator). ${runs.length} runs came back; each result was re-validated and re-simulated here with 30 seeds before being shown. Top 3 below.`,
+    explanation: `A managed agent ran ${RUNS} seeded searches in a remote sandbox and ${runs.length} came back. Each was re-checked and re-simulated here. The best three:`,
     candidates: candidates.slice(0, 3),
     stats: { proposed: runs.length, firstPassValid: valid, validAfterRepair: valid, tokens: json.usage?.total_tokens, ms: { propose: total, repair: 0, gate: 0, simulate: 0, total } },
   };

@@ -4,6 +4,7 @@ import { NewProject } from './screens/NewProject';
 import { PlanReview } from './screens/PlanReview';
 import { Workspace } from './screens/Workspace';
 import { loadProjects, saveProjects, type Project } from './store';
+import { ThumbRenderer } from './ui/thumbs';
 
 type Route = { name: 'landing' } | { name: 'new' } | { name: 'plan' | 'sim'; id: string };
 
@@ -23,8 +24,10 @@ export default function App() {
   if (route.name === 'new') return <NewProject onHome={home} onCreated={(p) => add(p, 'plan')} />;
   if (route.name === 'plan' && project) {
     return (
-      <PlanReview
-        project={project}
+      <>
+        <ThumbRenderer />
+        <PlanReview
+          project={project}
         onHome={home}
         onChange={(patch) => update(project.id, patch)}
         onLayout={(patch) => {
@@ -32,7 +35,8 @@ export default function App() {
           setRoute({ name: 'sim', id: project.id });
         }}
         onOpenSim={() => setRoute({ name: 'sim', id: project.id })}
-      />
+        />
+      </>
     );
   }
   if (route.name === 'sim' && project && project.versions.length) {
