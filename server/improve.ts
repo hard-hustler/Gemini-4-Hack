@@ -13,7 +13,7 @@ import type { Emit } from '../src/contracts';
 import { localSearch, opsBetween } from '../src/engines/search';
 import { validate } from '../src/engines/validate';
 import { compare, evaluate, type Metrics } from '../src/engines/versions';
-import { applyOps, type EditOp, type FactorySpec } from '../src/spec';
+import { applyOps, leanSpec as lean, type EditOp, type FactorySpec } from '../src/spec';
 import { decide, interact, MODELS, type Question } from './gemini';
 import { proposalSchema, situation } from './optimize';
 import { GEOMETRY_RULES, toOps } from './pipeline';
@@ -54,14 +54,6 @@ export interface Round {
   tried: Tried[];
   kept?: string;
   ms: number;
-}
-
-/** Stations without display fields, so prompts carry layout facts only. */
-function lean(spec: FactorySpec): FactorySpec {
-  return {
-    ...spec,
-    stations: spec.stations.map(({ name: _n, catalogId: _c, height: _h, shape: _s, modelUrl: _m, image: _i, listingUrl: _l, checkoutUrl: _k, ...s }) => s),
-  };
 }
 
 const sign = (v: number, digits = 1) => `${v > 0 ? '+' : ''}${v.toFixed(digits)}`;

@@ -37,7 +37,7 @@ Builders propose; checkers decide. Models never emit coordinates.
 | Read + plan | `gemini-4-hydrogen` | `Requirements` (steps, counts, floor, demand, walls) | `checkRequirements()` in code; errors fed back, up to 3 attempts |
 | Equip | catalog lookup | `EquipmentLine[]` | the user, on the Equipment screen |
 | Check | `gemini-decision-1` | per-step "is this in the brief?" and a coverage score | independent of the planner: it sees only the brief |
-| Convert | `gemini-4-hydrogen` + `gemini-decision-1` | Shop listing -> `CatalogItem` with a suitability score | the user |
+| Design a machine | `gemini-4-hydrogen` reads the listing photo and text | a `MachineRecipe`: archetype, size, colours, features (never geometry) | `checkRecipe()` in code, errors fed back up to 3 times; then `gemini-decision-1` confirms the archetype and each feature against the photo, sends a contradicted archetype back once, and drops features it cannot see |
 | Place | `src/engines/place.ts` | `FactorySpec` | `validate()`: a layout is valid by construction or the placer says why not |
 | Simulate | `src/engines/simulate.ts` | metrics | queue-theory check in the eval |
 | Improve | goal-driven loop (`server/improve.ts`): `gemini-4-neon` proposes for a goal, seeing what earlier rounds tried and how each turned out; a seeded search competes with it; or a Managed Agent runs the search in a sandbox | candidate op lists | `validate()`, Decisions gate, then the simulator; a change is kept only if it beats the current layout, and the loop stops when a round finds nothing better |
@@ -54,13 +54,29 @@ little once a search ran. So the model decides what goes on the floor and code
 decides where. The Decisions check can also send a station count that
 contradicts the brief back to the planner for one revision.
 
+## Machine catalog
+
+A machine is a recipe, not a mesh (`src/machines.ts`): one of 12 archetypes
+(bench, table, rack, cabinet, machine, enclosure, conveyor, cart, tank, press,
+kiosk, robot), a size in metres, four colours from a fixed palette, and a list
+of features each archetype is allowed to carry. `buildParts()` turns a recipe
+into positioned boxes and cylinders. The model says what the machine has; code
+decides where every part goes, so a machine is always exactly its stated size
+and every machine shares one look.
+
+`server/recipes.ts` converts a Shop listing: about 6 s per listing in testing,
+with the photo read and every kept feature confirmed by the Decisions API. The
+`recipeChecks` on the item record what was confirmed, what was dropped and
+why, and whether the size was stated or estimated. The Catalog screen shows
+every built-in machine and every archetype.
+
 ## Seams for the other workstreams
 
 All shared types are in `src/contracts.ts`.
 
-- **Catalog and 3D look**: replace the data in `src/catalog.ts`. Give any
-  `CatalogItem` a `modelUrl` (GLB) and the scene draws it, scaled to the
-  footprint, instead of the procedural model (`src/ui/Equipment.tsx`).
+- **Catalog and 3D look**: add archetypes, features or parts in
+  `src/machines.ts`, or replace the built-in items in `src/catalog.ts`. Any
+  `CatalogItem` with a `modelUrl` (GLB) is drawn instead of its recipe.
 - **Shopify search and buying**: `POST /api/catalog/search {query}` returns
   `ShopListing[]`; `POST /api/catalog/convert {listing, step}` returns a
   `CatalogItem`. Stations carry `listingUrl` and `checkoutUrl` through to the
@@ -126,4 +142,8 @@ Where it breaks, and what the numbers do not show:
 - The microphone path was tested in the browser with a synthetic audio stream, not a physical mic.
 - The sim charges forklift time only for loaded travel, and aisle width is not
   checked against walls.
-- Built-in equipment models are procedural placeholders.
+- Recipes carry an operator side, but the placer does not use it yet, and
+  there are no material in/out points or utility connection points.
+- A recipe can only describe what the 12 archetypes and their features cover;
+  anything else becomes the nearest archetype.
+- A real GLB has still not been loaded through `modelUrl`.

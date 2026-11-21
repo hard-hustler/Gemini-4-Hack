@@ -1,3 +1,5 @@
+import type { MachineRecipe } from './machines';
+
 // FactorySpec: the single source of truth. Models emit a spec or edit ops, never layout prose.
 // Units: metres, seconds, kW. Origin is the north-west corner; x runs east, y runs south.
 
@@ -36,6 +38,7 @@ export interface Station {
   catalogId?: string;
   height?: number;
   shape?: 'bench' | 'rack' | 'machine' | 'table' | 'conveyor';
+  recipe?: MachineRecipe;
   modelUrl?: string;
   image?: string;
   listingUrl?: string;
@@ -170,4 +173,12 @@ export function applyOp(spec: FactorySpec, op: EditOp): FactorySpec {
 
 export function applyOps(spec: FactorySpec, ops: EditOp[]): FactorySpec {
   return ops.reduce(applyOp, spec);
+}
+
+/** The spec without display fields: what a model needs to reason about a layout, and nothing else. */
+export function leanSpec(spec: FactorySpec): FactorySpec {
+  return {
+    ...spec,
+    stations: spec.stations.map(({ name: _n, catalogId: _c, height: _h, shape: _s, recipe: _r, modelUrl: _m, image: _i, listingUrl: _l, checkoutUrl: _k, ...s }) => s),
+  };
 }

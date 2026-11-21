@@ -1,126 +1,49 @@
-// Procedural low-poly equipment. SEAM: when a station carries a modelUrl (GLB from the
-// listing -> 3D converter) that model is drawn instead, scaled to the station footprint.
+// Draws one piece of equipment from its recipe (src/machines.ts).
+// SEAM: when a station carries a modelUrl (GLB), that model is drawn instead, scaled to the
+// footprint and recoloured to nothing: it keeps its own materials.
 
-import { useGLTF } from '@react-three/drei';
+import { Edges, useGLTF } from '@react-three/drei';
 import { Component, Suspense, useMemo, type ReactNode } from 'react';
 import * as THREE from 'three';
+import { buildParts, defaultRecipe, TONE_HEX, type MachineRecipe, type Part } from '../machines';
 
-export const INK = '#2b2d2e';
-export const BONE = '#f6f1e7';
-export const ORANGE = '#e2873a';
-const STEEL = '#c3c5c6';
-const WOOD = '#dcb98f';
+/** Edge lines keep same-coloured parts apart: an all-black cart still reads as a cart. */
+const EDGE: Record<string, string> = { ink: '#5d6266', bone: '#cfc6b4', steel: '#9a9d9f', wood: '#b8946a', orange: '#b9631c', red: '#a43b2a', green: '#35775a', blue: '#40699f', yellow: '#b98f2b', glass: '#7d99ad' };
 
-const ACCENTS: Record<string, string> = {
-  storage: '#e2873a',
-  kitting: '#e9b949',
-  prep: '#4d9d74',
-  assembly: '#e2873a',
-  weld: '#d1543f',
-  paint: '#5b8fd6',
-  test: '#d1543f',
-  inspect: '#4d9d74',
-  label: '#e9b949',
-  pack: '#b98a5a',
-  conveyor: '#5b8fd6',
-};
-export const accentFor = (type: string) => ACCENTS[type] ?? '#8a8478';
+export const INK = TONE_HEX.ink;
+export const BONE = TONE_HEX.bone;
+export const ORANGE = TONE_HEX.orange;
 
-type Shape = 'bench' | 'rack' | 'machine' | 'table' | 'conveyor';
-const DEFAULT_SHAPE: Record<string, Shape> = { storage: 'rack', prep: 'table', assembly: 'bench', test: 'machine', pack: 'table', kitting: 'bench', inspect: 'bench', conveyor: 'conveyor' };
-
-function Part({ size, at, color, round = false }: { size: [number, number, number]; at: [number, number, number]; color: string; round?: boolean }) {
+function PartMesh({ part }: { part: Part }) {
+  const [a, b, c] = part.size;
+  const color = TONE_HEX[part.tone];
+  const see = part.opacity !== undefined || part.tone === 'glass';
   return (
-    <mesh position={at} castShadow receiveShadow>
-      {round ? <cylinderGeometry args={[size[0] / 2, size[0] / 2, size[1], 20]} /> : <boxGeometry args={size} />}
-      <meshStandardMaterial color={color} roughness={0.85} metalness={0} />
+    <mesh position={part.at} rotation={part.rot} castShadow={!see} receiveShadow>
+      {part.shape === 'box' ? <boxGeometry args={[a, b, c]} /> : part.shape === 'cyl' ? <cylinderGeometry args={[a / 2, a / 2, b, 20]} /> : <cylinderGeometry args={[a / 2, c / 2, b, 20]} />}
+      <meshStandardMaterial
+        color={color}
+        roughness={part.tone === 'glass' ? 0.25 : 0.85}
+        metalness={0}
+        transparent={see}
+        opacity={part.opacity ?? (part.tone === 'glass' ? 0.7 : 1)}
+        emissive={part.glow ? color : '#000000'}
+        emissiveIntensity={part.glow ? 0.5 : 0}
+      />
+      {part.shape === 'box' && !see && <Edges threshold={15} color={EDGE[part.tone]} />}
     </mesh>
   );
 }
 
-function Legs({ w, d, h, color = INK }: { w: number; d: number; h: number; color?: string }) {
-  const t = 0.07;
-  const x = w / 2 - t;
-  const z = d / 2 - t;
+export function Machine({ recipe }: { recipe: MachineRecipe }) {
+  const parts = useMemo(() => buildParts(recipe), [recipe]);
   return (
     <>
-      {[
-        [x, z],
-        [-x, z],
-        [x, -z],
-        [-x, -z],
-      ].map(([px, pz], i) => (
-        <Part key={i} size={[t, h, t]} at={[px, h / 2, pz]} color={color} />
+      {parts.map((p, i) => (
+        <PartMesh key={i} part={p} />
       ))}
     </>
   );
-}
-
-function Procedural({ shape, w, d, h, accent }: { shape: Shape; w: number; d: number; h: number; accent: string }) {
-  switch (shape) {
-    case 'rack': {
-      const levels = Math.max(2, Math.round(h / 0.8));
-      return (
-        <>
-          <Legs w={w} d={d} h={h} color={ORANGE} />
-          {Array.from({ length: levels }, (_, i) => {
-            const y = 0.15 + (i * (h - 0.25)) / levels;
-            return (
-              <group key={i}>
-                <Part size={[w, 0.06, d]} at={[0, y, 0]} color={STEEL} />
-                {i < levels - 0 &&
-                  [-0.3, 0.05, 0.34].map((f, k) => (
-                    <Part key={k} size={[w * 0.24, Math.min(0.42, (h - 0.25) / levels - 0.14), d * 0.7]} at={[f * w, y + 0.03 + Math.min(0.42, (h - 0.25) / levels - 0.14) / 2, 0]} color={k === 1 ? BONE : WOOD} />
-                  ))}
-              </group>
-            );
-          })}
-        </>
-      );
-    }
-    case 'machine':
-      return (
-        <>
-          <Part size={[w, 0.12, d]} at={[0, 0.06, 0]} color={INK} />
-          <Part size={[w * 0.96, h * 0.72, d * 0.92]} at={[0, 0.12 + (h * 0.72) / 2, 0]} color={BONE} />
-          <Part size={[w * 0.96, 0.1, d * 0.92]} at={[0, 0.12 + h * 0.72 + 0.05, 0]} color={accent} />
-          <Part size={[w * 0.42, h * 0.3, 0.04]} at={[-w * 0.18, 0.12 + h * 0.44, d * 0.46 + 0.02]} color={INK} />
-          <Part size={[0.14, 0.14, 0.05]} at={[w * 0.3, 0.12 + h * 0.5, d * 0.46 + 0.02]} color={accent} />
-          <Part size={[0.12, h * 0.25, 0.12]} at={[w * 0.36, 0.12 + h * 0.72 + 0.1 + (h * 0.25) / 2, -d * 0.25]} color={INK} round />
-        </>
-      );
-    case 'conveyor':
-      return (
-        <>
-          <Legs w={w} d={d} h={h * 0.8} />
-          <Part size={[w, 0.1, d]} at={[0, h * 0.8, 0]} color={STEEL} />
-          <Part size={[w, 0.03, d * 0.78]} at={[0, h * 0.8 + 0.065, 0]} color={INK} />
-          <Part size={[w, 0.12, 0.05]} at={[0, h * 0.8 + 0.06, d / 2]} color={accent} />
-          <Part size={[w, 0.12, 0.05]} at={[0, h * 0.8 + 0.06, -d / 2]} color={accent} />
-        </>
-      );
-    case 'table':
-      return (
-        <>
-          <Legs w={w} d={d} h={h} />
-          <Part size={[w, 0.08, d]} at={[0, h, 0]} color={BONE} />
-          <Part size={[w * 0.92, 0.05, d * 0.86]} at={[0, h * 0.35, 0]} color={STEEL} />
-          <Part size={[w * 0.26, 0.3, d * 0.5]} at={[-w * 0.26, h + 0.19, 0]} color={WOOD} />
-          <Part size={[w * 0.18, 0.2, d * 0.36]} at={[w * 0.08, h + 0.14, d * 0.1]} color={accent} />
-        </>
-      );
-    default:
-      return (
-        <>
-          <Legs w={w} d={d} h={h} />
-          <Part size={[w, 0.08, d]} at={[0, h, 0]} color={WOOD} />
-          <Part size={[w, 0.55, 0.05]} at={[0, h + 0.3, -d / 2 + 0.03]} color={accent} />
-          <Part size={[w * 0.9, 0.05, d * 0.3]} at={[0, h + 0.5, -d / 2 + 0.18]} color={BONE} />
-          <Part size={[w * 0.2, 0.16, d * 0.3]} at={[w * 0.22, h + 0.12, d * 0.1]} color={INK} />
-          <Part size={[0.34, 0.5, 0.34]} at={[-w * 0.1, 0.25, d / 2 + 0.3]} color={INK} round />
-        </>
-      );
-  }
 }
 
 function Glb({ url, w, d, h }: { url: string; w: number; d: number; h: number }) {
@@ -151,13 +74,14 @@ class Fallback extends Component<{ fallback: ReactNode; children: ReactNode }, {
   }
 }
 
-/** Draws one piece of equipment standing on y = 0, centred on the origin, inside w x d x h metres. */
-export function Equipment({ type, shape, w, d, h, modelUrl }: { type: string; shape?: Shape; w: number; d: number; h: number; modelUrl?: string }) {
-  const procedural = <Procedural shape={shape ?? DEFAULT_SHAPE[type] ?? 'machine'} w={w} d={d} h={h} accent={accentFor(type)} />;
-  if (!modelUrl) return procedural;
+/** One piece of equipment standing on y = 0, centred on the origin. w, d, h are the footprint in metres. */
+export function Equipment({ type, shape, recipe, w, d, h, modelUrl }: { type: string; shape?: string; recipe?: MachineRecipe; w: number; d: number; h: number; modelUrl?: string }) {
+  const built = useMemo(() => recipe ?? defaultRecipe(type, { w, d, h }, shape), [recipe, type, shape, w, d, h]);
+  const drawn = <Machine recipe={built} />;
+  if (!modelUrl) return drawn;
   return (
-    <Fallback fallback={procedural}>
-      <Suspense fallback={procedural}>
+    <Fallback fallback={drawn}>
+      <Suspense fallback={drawn}>
         <Glb url={modelUrl} w={w} d={d} h={h} />
       </Suspense>
     </Fallback>

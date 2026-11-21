@@ -4,6 +4,7 @@
 //   shopify  (search and buying flow):        ShopListing -> CatalogItem via /api/catalog/convert
 // Everything that crosses a boundary is one of these types. Change them here, nowhere else.
 
+import type { FeatureKind, MachineRecipe } from './machines';
 import type { Wall } from './spec';
 
 /** One buyable or built-in piece of equipment. The catalog team owns the look (modelUrl, colour). */
@@ -24,10 +25,30 @@ export interface CatalogItem {
   listing?: ShopListing;
   /** GLB produced by the listing -> 3D converter; the scene falls back to a procedural model without it */
   modelUrl?: string;
-  /** which procedural model to draw when there is no modelUrl */
+  /** how the machine is built: an archetype plus features. The scene draws this. */
+  recipe?: MachineRecipe;
+  /** how the recipe was arrived at, when it was read from a listing */
+  recipeChecks?: RecipeChecks;
+  /** legacy hint, only used when there is no recipe */
   shape?: 'bench' | 'rack' | 'machine' | 'table' | 'conveyor';
   /** 0..1 from the Decisions API when specs were read off a listing */
   confidence?: number;
+}
+
+/** Provenance of a recipe read from a listing: what the independent check made of it. */
+export interface RecipeChecks {
+  /** did the listing photo reach the models, or was this read from text alone */
+  sawPhoto: boolean;
+  /** Decisions API: probability the product really is this archetype */
+  archetype: number;
+  /** each feature the recipe kept, with the probability the checker saw it */
+  features: { kind: FeatureKind; seen: number }[];
+  /** features the designer claimed that the checker did not see, or that could not be built */
+  dropped: { kind: FeatureKind; why: string }[];
+  /** true only when the listing states the dimensions used */
+  dimsStated: boolean;
+  /** designer attempts before the recipe passed the code checks */
+  attempts: number;
 }
 
 /** What the Shopify side hands over for one search result. */

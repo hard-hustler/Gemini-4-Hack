@@ -2,7 +2,7 @@
 // Nothing leaves this file unless it passed validate().
 
 import { validate, type ValidationError } from '../src/engines/validate';
-import { applyOps, centre, dockPoint, snap, type EditOp, type FactorySpec, type Rot, type Station, type Wall } from '../src/spec';
+import { applyOps, centre, dockPoint, leanSpec, snap, type EditOp, type FactorySpec, type Rot, type Station, type Wall } from '../src/spec';
 import { decide, interact, MODELS, type Block, type Question, type Step } from './gemini';
 
 const MAX_ATTEMPTS = 3;
@@ -230,7 +230,7 @@ ${GEOMETRY_RULES}
 ${STATION_DEFAULTS}
 "Move the dock to the north wall" means moveDock for that dock with wall "N" and an offset that keeps it clear of stations. If the instruction names a dock as inbound or outbound, use the dock index with that kind. If the instruction cannot be carried out, emit no ops and say why in reason.`;
 
-  const content: Block[] = [{ type: 'text', text: `Current spec:\n${JSON.stringify(spec)}\n` }];
+  const content: Block[] = [{ type: 'text', text: `Current spec:\n${JSON.stringify(leanSpec(spec))}\n` }];
   if (command.audio) content.push(command.audio, { type: 'text', text: 'The instruction is in the audio clip. Transcribe it into transcript.' });
   else content.push({ type: 'text', text: `Instruction: ${command.text ?? ''}` });
   const steps: Step[] = [{ type: 'user_input', content }];

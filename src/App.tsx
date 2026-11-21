@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Catalog } from './screens/Catalog';
 import { demoProject, Landing } from './screens/Landing';
 import { NewProject } from './screens/NewProject';
 import { PlanReview } from './screens/PlanReview';
@@ -6,7 +7,7 @@ import { Workspace } from './screens/Workspace';
 import { loadProjects, saveProjects, type Project } from './store';
 import { ThumbRenderer } from './ui/thumbs';
 
-type Route = { name: 'landing' } | { name: 'new' } | { name: 'plan' | 'sim'; id: string };
+type Route = { name: 'landing' } | { name: 'new' } | { name: 'catalog' } | { name: 'plan' | 'sim'; id: string };
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>(loadProjects);
@@ -21,13 +22,13 @@ export default function App() {
   };
   const project = route.name === 'plan' || route.name === 'sim' ? projects.find((p) => p.id === route.id) : undefined;
 
-  if (route.name === 'new') return <NewProject onHome={home} onCreated={(p) => add(p, 'plan')} />;
-  if (route.name === 'plan' && project) {
-    return (
-      <>
-        <ThumbRenderer />
-        <PlanReview
-          project={project}
+  let screen;
+  if (route.name === 'new') screen = <NewProject onHome={home} onCreated={(p) => add(p, 'plan')} />;
+  else if (route.name === 'catalog') screen = <Catalog onHome={home} />;
+  else if (route.name === 'plan' && project) {
+    screen = (
+      <PlanReview
+        project={project}
         onHome={home}
         onChange={(patch) => update(project.id, patch)}
         onLayout={(patch) => {
@@ -35,20 +36,26 @@ export default function App() {
           setRoute({ name: 'sim', id: project.id });
         }}
         onOpenSim={() => setRoute({ name: 'sim', id: project.id })}
-        />
-      </>
+      />
+    );
+  } else if (route.name === 'sim' && project && project.versions.length) {
+    screen = <Workspace key={project.id} project={project} onHome={home} onPlan={() => setRoute({ name: 'plan', id: project.id })} onChange={(patch) => update(project.id, patch)} />;
+  } else {
+    screen = (
+      <Landing
+        projects={projects}
+        onNew={() => setRoute({ name: 'new' })}
+        onCatalog={() => setRoute({ name: 'catalog' })}
+        onOpen={(p) => setRoute({ name: p.versions.length ? 'sim' : 'plan', id: p.id })}
+        onDemo={() => add(demoProject(), 'sim')}
+        onDelete={(id) => setProjects((cur) => cur.filter((p) => p.id !== id))}
+      />
     );
   }
-  if (route.name === 'sim' && project && project.versions.length) {
-    return <Workspace key={project.id} project={project} onHome={home} onPlan={() => setRoute({ name: 'plan', id: project.id })} onChange={(patch) => update(project.id, patch)} />;
-  }
   return (
-    <Landing
-      projects={projects}
-      onNew={() => setRoute({ name: 'new' })}
-      onOpen={(p) => setRoute({ name: p.versions.length ? 'sim' : 'plan', id: p.id })}
-      onDemo={() => add(demoProject(), 'sim')}
-      onDelete={(id) => setProjects((cur) => cur.filter((p) => p.id !== id))}
-    />
+    <>
+      <ThumbRenderer />
+      {screen}
+    </>
   );
 }

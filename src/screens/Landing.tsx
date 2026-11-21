@@ -34,7 +34,7 @@ export function demoProject(): Project {
   return { id: `demo-${Date.now()}`, name: requirements.name, createdAt: Date.now(), brief: { text: 'Built-in demo', files: [] }, requirements, equipment, trace: [], versions: [v1], currentId: v1.id };
 }
 
-export function Landing({ projects, onNew, onOpen, onDemo, onDelete }: { projects: Project[]; onNew: () => void; onOpen: (p: Project) => void; onDemo: () => void; onDelete: (id: string) => void }) {
+export function Landing({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: { projects: Project[]; onNew: () => void; onCatalog: () => void; onOpen: (p: Project) => void; onDemo: () => void; onDelete: (id: string) => void }) {
   const hero = useMemo(() => {
     const p = demoProject();
     const spec = p.versions[0].spec;
@@ -48,6 +48,9 @@ export function Landing({ projects, onNew, onOpen, onDemo, onDelete }: { project
         onHome={() => undefined}
         right={
           <>
+            <button className="text" onClick={onCatalog}>
+              Catalog
+            </button>
             <a href="/eval/index.html" target="_blank" rel="noreferrer">
               Eval
             </a>

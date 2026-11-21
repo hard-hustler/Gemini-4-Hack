@@ -138,3 +138,38 @@ describe('buildLayout', () => {
     expect(() => buildLayout({ ...req, floor: { width: 6, depth: 5 } }, equipment)).toThrow(PlaceError);
   });
 });
+
+describe('machine recipes', () => {
+  it('every archetype builds inside its envelope with every feature it allows', async () => {
+    const { ARCHETYPES, ARCHETYPE_NAMES, buildParts, checkRecipe, partsBounds, repairRecipe } = await import('../machines');
+    for (const archetype of ARCHETYPE_NAMES) {
+      for (const size of [{ w: 1.2, d: 0.6, h: 1.6 }, { w: 3, d: 1.5, h: 2.4 }, { w: 0.8, d: 0.8, h: 2 }]) {
+        const raw = { archetype, size, workHeight: 0.9, colors: { frame: 'ink', surface: 'wood', body: 'bone', accent: 'orange' }, features: ARCHETYPES[archetype].features.map((kind) => ({ kind, count: 2 })), operatorSide: 'front' } as const;
+        const { recipe } = repairRecipe(raw as never);
+        expect(checkRecipe(recipe), `${archetype} ${JSON.stringify(size)}`).toEqual([]);
+        const parts = buildParts(recipe);
+        expect(parts.length).toBeGreaterThan(2);
+        const b = partsBounds(parts);
+        const { w, d, h } = recipe.size;
+        // the stool, casters and a control box may sit just outside the footprint; nothing else may
+        expect(b.maxY, `${archetype} height`).toBeLessThanOrEqual(h + 0.02);
+        expect(b.minY).toBeGreaterThanOrEqual(-0.001);
+        expect(Math.max(-b.minX, b.maxX), `${archetype} width`).toBeLessThanOrEqual(w / 2 + 0.2);
+        expect(Math.max(-b.minZ, b.maxZ), `${archetype} depth`).toBeLessThanOrEqual(d / 2 + 0.5);
+        for (const q of parts) expect(q.size.every((v) => v > 0 && Number.isFinite(v)), `${archetype} part size`).toBe(true);
+      }
+    }
+  });
+  it('rejects what cannot be built and says how to fix it', async () => {
+    const { checkRecipe, normaliseRecipe, repairRecipe } = await import('../machines');
+    const bad = normaliseRecipe({ archetype: 'bench', size: { w: 1.5, d: 0.7, h: 0.9 }, workHeight: 0.9, features: [{ kind: 'backboard', count: 1 }, { kind: 'hopper', count: 1 }, { kind: 'drawers', count: 8 }] });
+    const errs = checkRecipe(bad);
+    expect(errs.some((e) => e.includes('cannot have "hopper"'))).toBe(true);
+    expect(errs.some((e) => e.includes('rises above the work surface'))).toBe(true);
+    expect(errs.some((e) => e.includes('drawers need'))).toBe(true);
+    const fixed = repairRecipe(bad);
+    expect(checkRecipe(fixed.recipe)).toEqual([]);
+    expect(fixed.dropped).toEqual(expect.arrayContaining(['hopper', 'backboard']));
+    expect(normaliseRecipe({ archetype: 'spaceship', features: [{ kind: 'lasers' }] }).archetype).toBe('machine');
+  });
+});

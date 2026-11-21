@@ -12,7 +12,7 @@
 // Builders (Hydrogen, Neon) propose. Checkers (validate(), Decisions API, the simulator) decide.
 
 import { pickItem } from '../src/catalog';
-import type { CatalogItem, Emit, EquipmentLine, PlanResult, ProcessStep, Requirements, ShopListing, TraceEvent } from '../src/contracts';
+import type { Emit, EquipmentLine, PlanResult, ProcessStep, Requirements, TraceEvent } from '../src/contracts';
 import { buildLayout, PlaceError } from '../src/engines/place';
 import { evaluate } from '../src/engines/versions';
 import type { Wall } from '../src/spec';
@@ -299,66 +299,4 @@ export function layoutProject(requirements: Requirements, equipment: EquipmentLi
     log({ stage: 'place', actor: 'engine', title: 'Could not place the equipment', detail: (e as Error).message, ms: Date.now() - t0, status: 'fail' });
     throw Object.assign(new Error((e as Error).message), { lines, trace });
   }
-}
-
-const itemSchema = {
-  type: 'object',
-  properties: {
-    name: { type: 'string', description: 'short product name, at most six words' },
-    w: { type: 'number', description: 'width in metres (the longer horizontal side)' },
-    d: { type: 'number', description: 'depth in metres' },
-    h: { type: 'number', description: 'height in metres' },
-    powerKw: { type: 'number', description: 'electrical draw in kW; 0 if it is not powered' },
-    needsWater: { type: 'boolean' },
-    shape: { type: 'string', enum: ['bench', 'rack', 'machine', 'table', 'conveyor'] },
-    dimsStated: { type: 'boolean', description: 'true only if the listing text states the dimensions you used' },
-  },
-  required: ['name', 'w', 'd', 'h', 'powerKw', 'needsWater', 'shape', 'dimsStated'],
-};
-
-/** Shopify listing -> CatalogItem. Hydrogen reads the specs; Decisions says whether it suits the step. */
-export async function convertListing(listing: ShopListing, step: { type: string; label: string; cycleTimeSec: number; operators: number }, emit?: Emit) {
-  const { trace, log, running } = tracer(emit);
-  running('convert', 'hydrogen', 'Reading specs from the listing');
-  const text = `Title: ${listing.title}\nSeller: ${listing.seller}\nPrice: ${listing.price} ${listing.currency}\n${listing.dims ? `Size option: ${listing.dims.text}\n` : ''}Description: ${(listing.description ?? '').slice(0, 4000)}`;
-  const res = await interact<any>({
-    model: MODELS.hydrogen,
-    input: `Read this product listing and emit its physical specs for a factory floor planner. Convert inches to metres (1 in = 0.0254 m). If a dimension is not stated, estimate it from the product type and set dimsStated false.\n\n${text}`,
-    schema: itemSchema,
-    thinking: 'low',
-  });
-  const j = res.json ?? {};
-  const side = (v: unknown, f: number) => (typeof v === 'number' && v >= 0.2 && v <= 12 ? Math.round(v * 100) / 100 : f);
-  log({ stage: 'convert', actor: 'hydrogen', title: 'Read specs from the listing', detail: `${side(j.w, 2)} x ${side(j.d, 1)} x ${side(j.h, 1)} m${j.dimsStated ? '' : ' (estimated, not stated)'}`, ms: res.ms, status: 'ok' });
-
-  let confidence: number | undefined;
-  try {
-    running('check', 'decisions', 'Checking the listing suits the step');
-    const d = await decide(text, {
-      fit: { type: 'noul', instructions: `The input is a product listing. Is this product suitable equipment for a "${step.label}" (${step.type}) station in a small light-manufacturing workshop?` },
-    });
-    const a = d.answers.fit;
-    if (a?.type === 'noul') confidence = a.noul;
-    log({ stage: 'check', actor: 'decisions', title: 'Checked the listing suits the step', detail: `${Math.round((confidence ?? 0) * 100)}% suitable for ${step.label}`, ms: d.ms, status: 'ok' });
-  } catch (e) {
-    log({ stage: 'check', actor: 'decisions', title: 'Suitability check failed', detail: (e as Error).message, ms: 0, status: 'fail' });
-  }
-
-  const item: CatalogItem = {
-    id: `shop-${listing.variantId.split('/').pop()}`,
-    name: String(j.name ?? listing.title).slice(0, 60),
-    stationType: step.type,
-    footprint: { w: side(j.w, 2), d: side(j.d, 1), h: side(j.h, 1) },
-    cycleTimeSec: step.cycleTimeSec,
-    operators: step.operators,
-    powerKw: typeof j.powerKw === 'number' && j.powerKw >= 0 ? j.powerKw : 0,
-    needsWater: Boolean(j.needsWater),
-    price: listing.price,
-    source: 'shopify',
-    listing: { ...listing, description: undefined },
-    shape: j.shape,
-    confidence,
-    // modelUrl: filled in by the listing -> 3D converter when it is ready
-  };
-  return { item, dimsStated: Boolean(j.dimsStated), trace };
 }

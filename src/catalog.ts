@@ -2,6 +2,7 @@
 // (and adds modelUrl per item). The harness only calls pickItem() and genericItem().
 
 import type { CatalogItem, ProcessStep } from './contracts';
+import { defaultRecipe } from './machines';
 
 export const BUILTIN: CatalogItem[] = [
   { id: 'rack-std', name: 'Pallet rack, 3 m bay', stationType: 'storage', footprint: { w: 3, d: 1.5, h: 2.4 }, cycleTimeSec: 20, operators: 0, powerKw: 0, needsWater: false, price: 450, source: 'builtin', shape: 'rack' },
@@ -17,14 +18,19 @@ export const BUILTIN: CatalogItem[] = [
   { id: 'conveyor-3m', name: 'Roller conveyor, 3 m', stationType: 'conveyor', footprint: { w: 3, d: 0.5, h: 0.8 }, cycleTimeSec: 15, operators: 0, powerKw: 0.4, needsWater: false, price: 800, source: 'builtin', shape: 'conveyor' },
 ];
 
+// every built-in item is drawn from a recipe, like everything else
+for (const item of BUILTIN) item.recipe = defaultRecipe(item.stationType, item.footprint, item.shape);
+
 /** A catalog item for a step type the catalog does not know, built from the model's own estimates. */
 export function genericItem(step: ProcessStep): CatalogItem {
   const half = (v: number) => Math.max(0.5, Math.round(v * 2) / 2);
+  const footprint = { w: half(step.w || 2), d: half(step.d || 1), h: 1.2 };
   return {
     id: `generic-${step.type}`,
     name: step.label || step.type,
     stationType: step.type,
-    footprint: { w: half(step.w || 2), d: half(step.d || 1), h: 1 },
+    footprint,
+    recipe: defaultRecipe(step.type, footprint),
     cycleTimeSec: Math.max(1, step.cycleTimeSec || 60),
     operators: step.operators ?? 1,
     powerKw: step.powerKw ?? 0,

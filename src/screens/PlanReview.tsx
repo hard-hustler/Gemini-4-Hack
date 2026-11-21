@@ -5,15 +5,10 @@ import type { FactorySpec } from '../spec';
 import { api, apiStream, ApiError, money, pct, type Project } from '../store';
 import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
 import { Icon } from '../ui/icons';
-import { useThumb } from '../ui/thumbs';
+import { featureText } from '../machines';
+import { MachineThumb } from '../ui/thumbs';
 
 const WALL = { N: 'north', S: 'south', E: 'east', W: 'west' } as const;
-
-function Thumb({ item }: { item: CatalogItem }) {
-  const rendered = useThumb(item);
-  if (item.listing?.image) return <img className="equip-img photo" src={item.listing.image} alt="" />;
-  return rendered ? <img className="equip-img" src={rendered} alt="" /> : <span className="equip-img" />;
-}
 
 function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () => void; onPick: (item: CatalogItem, trace: TraceEvent[]) => void }) {
   const [query, setQuery] = useState(line.item.name);
@@ -207,7 +202,7 @@ export function PlanReview({
             <div className="equipment">
               {lines.map((l, i) => (
                 <article key={l.stepType} className={`equip${l.qty === 0 ? ' off' : ''}`}>
-                  <Thumb item={l.item} />
+                  <MachineThumb item={l.item} />
                   <div className="equip-body">
                     <span>
                       {i + 1}. {l.label}
@@ -218,6 +213,14 @@ export function PlanReview({
                       {l.item.needsWater ? ' · needs water' : ''}
                       {l.item.source === 'shopify' ? ` · from ${l.item.listing?.seller ?? 'Shop'}` : ''}
                     </span>
+                    {l.item.source === 'shopify' && l.item.recipe && (
+                      <span className="muted small">
+                        Built from the listing{l.item.recipeChecks?.sawPhoto ? ' photo' : ' text'} as a {l.item.recipe.archetype}
+                        {l.item.recipe.features.length ? ` with ${featureText(l.item.recipe.features)}` : ''}.
+                        {l.item.recipeChecks && !l.item.recipeChecks.dimsStated ? ' Size is estimated; the listing does not state it.' : ''}
+                        {l.item.recipeChecks?.dropped.length ? ` Left out: ${l.item.recipeChecks.dropped.map((x) => `${x.kind} (${x.why})`).join(', ')}.` : ''}
+                      </span>
+                    )}
                     {l.inBrief !== undefined && l.inBrief < 0.5 && (
                       <span className="flag">
                         <Icon name="warn" size={14} /> Not clearly in your brief

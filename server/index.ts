@@ -6,7 +6,8 @@ import { GeminiError, MODELS, type Block } from './gemini';
 import { deepSearch } from './agent';
 import { improveToGoal, type Goal } from './improve';
 import { optimise } from './optimize';
-import { convertListing, layoutProject, planProject } from './harness';
+import { layoutProject, planProject } from './harness';
+import { convertListing } from './recipes';
 import { priceEquipment, searchListings } from './shop';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 

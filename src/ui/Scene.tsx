@@ -107,7 +107,7 @@ function StationNode({
 }) {
   const toWorld = useToWorld(spec);
   const f = footprint(s);
-  const h = s.height ?? (s.type === 'storage' ? 2.2 : 1);
+  const h = s.recipe?.size.h ?? s.height ?? (s.type === 'storage' ? 2.2 : 1);
   const [hover, setHover] = useState(false);
   const controls = useThree((st) => st.controls) as { enabled: boolean } | null;
   const grab = useRef<{ dx: number; dy: number; moved: boolean } | null>(null);
@@ -163,7 +163,7 @@ function StationNode({
         </mesh>
       )}
       <group rotation={[0, rotated ? Math.PI / 2 : 0, 0]}>
-        <Equipment type={s.type} shape={s.shape} w={rotated ? f.d : f.w} d={rotated ? f.w : f.d} h={h} modelUrl={s.modelUrl} />
+        <Equipment type={s.type} shape={s.shape} recipe={s.recipe} w={s.w} d={s.d} h={h} modelUrl={s.modelUrl} />
       </group>
       {/* invisible grab box */}
       <mesh position={[0, h / 2, 0]} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerOver={() => interactive && setHover(true)} onPointerOut={() => setHover(false)}>
