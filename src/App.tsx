@@ -1,11 +1,50 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { compare, evaluate, makeVersion, type Metrics, type Version } from './engines/versions';
 import { validate, type ValidationError } from './engines/validate';
 import { workshop } from './fixtures/workshop';
 import { applyOp, type EditOp, type FactorySpec } from './spec';
+import { fileToBase64, startRecording, type Recorder } from './ui/audio';
 import { Scene, type Layers } from './ui/Scene';
 
 const STORE_KEY = 'dryrun.versions.v1';
+
+interface Confidence {
+  confidence: number;
+  readAs: string;
+}
+interface Notice {
+  tone: 'ok' | 'error';
+  title: string;
+  lines: string[];
+}
+
+async function api<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const json = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+  if (!res.ok) {
+    const tried = Array.isArray(json.attempts) ? ` (${json.attempts.length} attempts)` : '';
+    const errs = Array.isArray(json.errors) ? json.errors.map((e: { message: string }) => e.message) : [];
+    throw Object.assign(new Error(`${json.error ?? 'Request failed'}${tried}`), { lines: errs });
+  }
+  return json as T;
+}
+
+const describeOp = (op: EditOp): string => {
+  switch (op.op) {
+    case 'move':
+      return `move ${op.id} to ${op.x},${op.y}`;
+    case 'rotate':
+      return `rotate ${op.id} to ${op.rot}`;
+    case 'add':
+      return `add ${op.station.id} (${op.station.type})`;
+    case 'remove':
+      return `remove ${op.id}`;
+    case 'moveDock':
+      return `move dock ${op.index} to ${op.wall} wall at ${op.offset} m`;
+    case 'setParam':
+      return `set ${op.path} = ${op.value}`;
+  }
+};
 
 function loadVersions(): Version[] {
   try {
@@ -114,6 +153,90 @@ export default function App() {
   const [rejected, setRejected] = useState<ValidationError[]>([]);
   const [layers, setLayers] = useState<Layers>({ flow: true, forklift: true, power: false, water: false, docks: true });
   const [cmp, setCmp] = useState<{ a: string; b: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [confidence, setConfidence] = useState<Record<string, Confidence>>({});
+  const [command, setCommand] = useState('');
+  const [recording, setRecording] = useState(false);
+  const recorder = useRef<Recorder | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const run = async (label: string, job: () => Promise<void>) => {
+    setBusy(label);
+    setNotice(null);
+    try {
+      await job();
+    } catch (e) {
+      const err = e as Error & { lines?: string[] };
+      setNotice({ tone: 'error', title: err.message, lines: err.lines ?? [] });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Hydrogen reads the plan, the server validates it, and it becomes v1 of a new timeline. */
+  const readPlan = (blob: Blob, mimeType: string) =>
+    run('Reading plan with Hydrogen', async () => {
+      const out = await api<{ spec: FactorySpec; notes: string; attempts: { errors: string[] }[]; confidence: Record<string, Confidence>; confidenceError?: string; ms: number }>(
+        '/api/read',
+        { mimeType, data: await fileToBase64(blob) },
+      );
+      const ev = evaluate(out.spec);
+      if (!ev.ok) throw Object.assign(new Error('Server returned a layout that fails validation'), { lines: ev.errors.map((x) => x.message) });
+      const v = makeVersion(out.spec, ev.metrics, null, 1, 'Read from plan');
+      setVersions([v]);
+      setCurrentId(v.id);
+      setDraft(v.spec);
+      setRejected([]);
+      setConfidence(out.confidence);
+      const unsure = Object.entries(out.confidence).filter(([, c]) => c.confidence < 0.7);
+      setNotice({
+        tone: 'ok',
+        title: `Plan read in ${(out.ms / 1000).toFixed(1)} s, ${out.attempts.length} attempt${out.attempts.length > 1 ? 's' : ''}`,
+        lines: [
+          `${out.spec.stations.length} stations, ${out.spec.docks.length} docks`,
+          unsure.length ? `Check: ${unsure.map(([id, c]) => `${id} (${Math.round(c.confidence * 100)}%, looks like ${c.readAs})`).join(', ')}` : 'Decisions API is confident in every element',
+          ...(out.confidenceError ? [`Confidence check failed: ${out.confidenceError}`] : []),
+          out.notes,
+        ].filter(Boolean),
+      });
+    });
+
+  /** Hydrogen turns a typed or spoken instruction into ops; the server only returns ops that validate. */
+  const sendEdit = (payload: { text?: string; audio?: { mimeType: string; data: string } }) =>
+    run(payload.audio ? 'Listening with Hydrogen' : 'Planning edit with Hydrogen', async () => {
+      const out = await api<{ ops: EditOp[]; spec: FactorySpec; transcript: string; reason: string; attempts: unknown[] }>('/api/edit', { spec: draft, ...payload });
+      if (!out.ops.length) {
+        setNotice({ tone: 'error', title: 'No change made', lines: [`"${out.transcript}"`, out.reason] });
+        return;
+      }
+      setDraft(out.spec);
+      setRejected([]);
+      setCommand('');
+      setNotice({ tone: 'ok', title: `"${out.transcript}"`, lines: [...out.ops.map(describeOp), out.attempts.length > 1 ? `took ${out.attempts.length} attempts to validate` : ''].filter(Boolean) });
+    });
+
+  const toggleMic = async () => {
+    if (recording && recorder.current) {
+      setRecording(false);
+      const rec = recorder.current;
+      recorder.current = null;
+      try {
+        await sendEdit({ audio: await rec.stop() });
+      } catch (e) {
+        setNotice({ tone: 'error', title: 'Could not process the recording', lines: [(e as Error).message] });
+      }
+      return;
+    }
+    try {
+      recorder.current = await startRecording();
+      setRecording(true);
+    } catch (e) {
+      setNotice({ tone: 'error', title: 'Microphone unavailable', lines: [(e as Error).message] });
+    }
+  };
+
+  const readSample = async () => readPlan(await (await fetch('/sample-sketch.png')).blob(), 'image/png');
 
   useEffect(() => {
     try {
@@ -178,6 +301,8 @@ export default function App() {
     setDraft(fresh[0].spec);
     setRejected([]);
     setCmp(null);
+    setConfidence({});
+    setNotice(null);
   };
 
   const sim = metrics.sim;
@@ -195,6 +320,7 @@ export default function App() {
           layers={layers}
           badIds={previewErrors.flatMap((e) => e.ids)}
           bottleneck={sim.bottleneck.name}
+          confidence={confidence}
           onDrag={onDrag}
           onDrop={onDrop}
         />
@@ -218,8 +344,38 @@ export default function App() {
 
       <aside className="tools">
         <div className="group">
-          <button disabled title="Arrives with the Gemini milestone">Sketch photo</button>
-          <button disabled title="Arrives with the Gemini milestone">Voice edit</button>
+          <span className="group-title">Plan in</span>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/*,application/pdf"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void readPlan(f, f.type || 'image/jpeg');
+              e.target.value = '';
+            }}
+          />
+          <button disabled={!!busy} onClick={() => fileInput.current?.click()}>
+            Sketch photo or PDF
+          </button>
+          <button disabled={!!busy} onClick={() => void readSample()}>
+            Try the sample sketch
+          </button>
+          <span className="group-title">Edit by voice or text</span>
+          <button className={recording ? 'rec' : ''} disabled={!!busy && !recording} onClick={() => void toggleMic()}>
+            {recording ? 'Stop and apply' : 'Voice edit'}
+          </button>
+          <form
+            className="command"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (command.trim()) void sendEdit({ text: command.trim() });
+            }}
+          >
+            <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="move the dock to the north wall" disabled={!!busy} />
+            <button disabled={!!busy || !command.trim()}>Go</button>
+          </form>
         </div>
         <div className="group">
           <span className="group-title">Layers</span>
@@ -271,6 +427,22 @@ export default function App() {
             <span key={i}>{e.message}</span>
           ))}
           {!preview && <button onClick={() => setRejected([])}>Dismiss</button>}
+        </div>
+      )}
+
+      {(busy || notice) && (
+        <div className={`notice ${busy ? 'busy' : notice!.tone}`} role="status">
+          {busy ? (
+            <b>{busy}…</b>
+          ) : (
+            <>
+              <b>{notice!.title}</b>
+              {notice!.lines.map((l, i) => (
+                <span key={i}>{l}</span>
+              ))}
+              <button onClick={() => setNotice(null)}>Dismiss</button>
+            </>
+          )}
         </div>
       )}
 

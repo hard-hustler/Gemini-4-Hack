@@ -15,14 +15,17 @@ npm run dev     # web on :5173, api on :8787
 npm test        # engine unit tests
 ```
 
-Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Milestone 1 needs no key.
+Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
+3D view, drag edits and engines still work; only the model buttons fail.
 
 ## Status
 
 - [x] **Milestone 1**: fixture spec, engines, 3D floor, drag to move, layers,
       metrics strip, version timeline with side-by-side compare. No model calls.
-- [ ] Milestone 2: Hydrogen reads a sketch photo / document / voice into a
-      FactorySpec or edit ops; Decisions API scores each element.
+- [x] **Milestone 2**: `gemini-4-hydrogen` reads a sketch photo or PDF into a
+      FactorySpec and turns a spoken or typed instruction into edit ops, each
+      retried against `validate()` (max 3). `gemini-decision-1` (Decisions API)
+      gives a per-element confidence shown on every label.
 - [ ] Milestone 3: Neon proposes improvement ops; propose -> validate -> retry
       loop; candidates evaluated in parallel.
 - [ ] Milestone 4: Shop MCP pricing and cart.
@@ -43,7 +46,20 @@ shown, routed or simulated.
 | cost | `src/engines/cost.ts` | build cost, cost per unit, kWh per unit, forklift travel per hour |
 | versions | `src/engines/versions.ts` | saved specs with metrics, parent and diff; compare any two |
 
+## Model jobs
+
+| Model | Job | Where |
+| --- | --- | --- |
+| `gemini-4-hydrogen` | sketch / PDF -> spec; voice or text -> edit ops (JSON-schema output) | `server/pipeline.ts` `readPlan`, `editPlan` |
+| `gemini-decision-1` | per-element confidence: is the thing we read really a station / dock? | `server/pipeline.ts` `scoreElements` |
+| `gemini-4-neon` | improvement ops and bottleneck explanation | milestone 3 |
+
+All calls go through `server/gemini.ts` (Interactions API and Decisions API over REST).
+
 ## Known rough edges
+
+- In-browser mic capture is untested; the voice path was tested by posting a
+  WAV clip to `/api/edit`.
 
 - drei `<Html>` labels log a React "unmount a root while rendering" console
   error on re-render. Harmless, but noisy.

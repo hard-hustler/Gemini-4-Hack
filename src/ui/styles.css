@@ -108,3 +108,20 @@ button.primary { background: var(--accent); color: #1a1a1a; border-color: var(--
 .warn { color: var(--warn); }
 .diff { color: var(--muted); }
 .diff b { color: var(--text); }
+
+.label em { font-style: normal; font-size: 10px; color: var(--good); }
+.label em.low { color: var(--accent); font-weight: 700; }
+.command { display: flex; gap: 6px; }
+.command input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: #1b2027; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+button.rec { background: #7a231c; border-color: var(--warn); animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: 1; } to { opacity: 0.6; } }
+.notice {
+  position: absolute; bottom: 84px; left: 50%; transform: translateX(-50%); max-width: min(620px, 90vw); z-index: 30;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: flex; flex-direction: column; gap: 3px; backdrop-filter: blur(8px);
+}
+.notice.ok { border-color: var(--good); }
+.notice.error { border-color: var(--warn); }
+.notice.error b { color: var(--warn); }
+.notice.busy { border-color: var(--accent); }
+.notice span { color: var(--muted); }
+.notice button { align-self: flex-end; margin-top: 4px; }

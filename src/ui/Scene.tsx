@@ -20,6 +20,8 @@ interface SceneProps {
   /** station ids to paint as invalid (while dragging) */
   badIds?: string[];
   bottleneck?: string;
+  /** per-element confidence from the Decisions API, keyed by station id or dock:N */
+  confidence?: Record<string, { confidence: number; readAs: string }>;
   interactive?: boolean;
   onDrag?: (id: string, x: number, y: number) => void;
   onDrop?: (id: string) => void;
@@ -88,6 +90,7 @@ function StationBox({
   s,
   bad,
   hot,
+  conf,
   interactive,
   onDrag,
   onDrop,
@@ -97,6 +100,7 @@ function StationBox({
   s: Station;
   bad: boolean;
   hot: boolean;
+  conf?: number;
   interactive: boolean;
   onDrag?: SceneProps['onDrag'];
   onDrop?: SceneProps['onDrop'];
@@ -174,12 +178,13 @@ function StationBox({
       <Html position={[0, h / 2 + 0.35, 0]} center className={`label${bad ? ' bad' : ''}${hot ? ' hot' : ''}`} zIndexRange={[10, 0]} pointerEvents="none" style={{ pointerEvents: 'none' }}>
         <b>{s.id}</b>
         <span>{s.type}</span>
+        {conf !== undefined && <em className={conf < 0.7 ? 'low' : ''}>{Math.round(conf * 100)}% sure</em>}
       </Html>
     </group>
   );
 }
 
-function Docks({ spec }: { spec: FactorySpec }) {
+function Docks({ spec, confidence }: { spec: FactorySpec; confidence?: SceneProps['confidence'] }) {
   const toWorld = useToWorld(spec);
   return (
     <>
@@ -195,6 +200,9 @@ function Docks({ spec }: { spec: FactorySpec }) {
             </mesh>
             <Html position={[0, 1.2, 0]} center className="label dock" zIndexRange={[10, 0]} pointerEvents="none" style={{ pointerEvents: 'none' }}>
               <b>dock {kind}</b>
+              {confidence?.[`dock:${i}`] && (
+                <em className={confidence[`dock:${i}`].confidence < 0.7 ? 'low' : ''}>{Math.round(confidence[`dock:${i}`].confidence * 100)}% sure</em>
+              )}
             </Html>
           </group>
         );
@@ -293,7 +301,7 @@ function Flow({ spec }: { spec: FactorySpec }) {
   );
 }
 
-function World({ spec, routes, layers, badIds = [], bottleneck, interactive = true, onDrag, onDrop }: SceneProps) {
+function World({ spec, routes, layers, badIds = [], bottleneck, confidence, interactive = true, onDrag, onDrop }: SceneProps) {
   const toWorld = useToWorld(spec);
   const [dragging, setDragging] = useState(false);
   const span = Math.max(spec.floor.width, spec.floor.depth);
@@ -311,13 +319,14 @@ function World({ spec, routes, layers, badIds = [], bottleneck, interactive = tr
           s={s}
           bad={badIds.includes(s.id)}
           hot={bottleneck === s.type}
+          conf={confidence?.[s.id]?.confidence}
           interactive={interactive}
           onDrag={onDrag}
           onDrop={onDrop}
           setDragging={setDragging}
         />
       ))}
-      {layers.docks && <Docks spec={spec} />}
+      {layers.docks && <Docks spec={spec} confidence={confidence} />}
       {layers.forklift &&
         routes?.forklift.map((p, i) => (
           <Line key={`f${i}`} points={p.points.map((q) => toWorld(q, 0.04))} color="#f2c230" lineWidth={2.5} transparent opacity={0.85} />
