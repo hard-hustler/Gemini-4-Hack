@@ -180,6 +180,122 @@ export function astar(g: Grid, starts: Cell[], goals: Cell[]): Cell[] | null {
   return null;
 }
 
+const OPPOSITE = [1, 0, 3, 2] as const;
+/** Cost of a step along belt already laid the same way, against it, and of a turn (a fresh step costs 1). */
+const REUSE = 0.35;
+const AGAINST = 3;
+const TURN = 1.5;
+
+/**
+ * Conveyor routing. Like astar, but a step along belt that is already laid in the same direction
+ * is cheap and a turn is dear, so paths merge into shared trunks with straight runs instead of
+ * each taking its own way across the floor. `laid` holds the directed steps already used
+ * (cell index * 4 + direction); the caller adds each path it accepts with layBelt().
+ */
+export function trunkPath(g: Grid, starts: Cell[], goals: Cell[], laid: Set<number>): Cell[] | null {
+  if (!starts.length || !goals.length) return null;
+  const n = g.cols * g.rows;
+  const goalSet = new Set(goals.map((c) => idx(g, c.c, c.r)));
+  const dist = new Float64Array(n * 4).fill(Infinity);
+  const came = new Int32Array(n * 4).fill(-1);
+  const closed = new Uint8Array(n * 4);
+  const heap: [number, number][] = [];
+  const push = (f: number, i: number) => {
+    heap.push([f, i]);
+    let k = heap.length - 1;
+    while (k > 0) {
+      const p = (k - 1) >> 1;
+      if (heap[p][0] <= heap[k][0]) break;
+      [heap[p], heap[k]] = [heap[k], heap[p]];
+      k = p;
+    }
+  };
+  const pop = () => {
+    const top = heap[0];
+    const last = heap.pop()!;
+    if (heap.length) {
+      heap[0] = last;
+      let k = 0;
+      for (;;) {
+        const l = 2 * k + 1;
+        const r = l + 1;
+        let m = k;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === k) break;
+        [heap[m], heap[k]] = [heap[k], heap[m]];
+        k = m;
+      }
+    }
+    return top;
+  };
+  // a state is (cell, heading); leaving a start cell in any direction is not a turn
+  for (const s of starts) {
+    if (!isFree(g, s.c, s.r)) continue;
+    const i = idx(g, s.c, s.r);
+    for (let d = 0; d < 4; d++) {
+      dist[i * 4 + d] = 0;
+      push(0, i * 4 + d);
+    }
+  }
+  while (heap.length) {
+    const [, st] = pop();
+    if (closed[st]) continue;
+    closed[st] = 1;
+    const i = st >> 2;
+    const dir = st & 3;
+    if (goalSet.has(i)) {
+      const path: Cell[] = [];
+      let last = -1;
+      for (let k = st; k !== -1; k = came[k]) {
+        const cell = k >> 2;
+        if (cell !== last) path.push({ c: cell % g.cols, r: Math.floor(cell / g.cols) });
+        last = cell;
+      }
+      return path.reverse();
+    }
+    const c = i % g.cols;
+    const r = Math.floor(i / g.cols);
+    for (let nd = 0; nd < 4; nd++) {
+      const nc = c + N4[nd][0];
+      const nr = r + N4[nd][1];
+      if (!isFree(g, nc, nr)) continue;
+      const ni = idx(g, nc, nr);
+      const step = laid.has(i * 4 + nd) ? REUSE : laid.has(ni * 4 + OPPOSITE[nd]) ? AGAINST : 1;
+      const t = dist[st] + step + (nd === dir ? 0 : TURN);
+      const ns = ni * 4 + nd;
+      if (t < dist[ns]) {
+        dist[ns] = t;
+        came[ns] = st;
+        push(t, ns);
+      }
+    }
+  }
+  return null;
+}
+
+/** Record a path as belt, so later paths can ride it. */
+export function layBelt(g: Grid, path: Cell[], laid: Set<number>): void {
+  for (let k = 1; k < path.length; k++) {
+    const dc = path[k].c - path[k - 1].c;
+    const dr = path[k].r - path[k - 1].r;
+    const d = N4.findIndex(([x, y]) => x === dc && y === dr);
+    if (d >= 0) laid.add(idx(g, path[k - 1].c, path[k - 1].r) * 4 + d);
+  }
+}
+
+/** Metres of belt in a laid network: each stretch counted once, however many paths ride it. */
+export function beltLength(g: Grid, laid: Set<number>): number {
+  const seen = new Set<number>();
+  for (const e of laid) {
+    const i = e >> 2;
+    const d = e & 3;
+    const ni = i + N4[d][0] + N4[d][1] * g.cols;
+    seen.add(Math.min(e, ni * 4 + OPPOSITE[d]));
+  }
+  return seen.size * g.cell;
+}
+
 export function stationIndexById(spec: FactorySpec, id: string): number {
   return spec.stations.findIndex((s: Station) => s.id === id);
 }

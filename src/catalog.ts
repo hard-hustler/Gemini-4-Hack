@@ -25,10 +25,10 @@ for (const item of BUILTIN) item.recipe = defaultRecipe(item.stationType, item.f
 export function genericItem(step: ProcessStep): CatalogItem {
   const half = (v: number) => Math.max(0.5, Math.round(v * 2) / 2);
   const footprint = { w: half(step.w || 2), d: half(step.d || 1), h: 1.2 };
-  const recipe = defaultRecipe(step.type, footprint, undefined, step.label);
+  const recipe = defaultRecipe(step.type, footprint, undefined, `${step.machine ?? ''} ${step.label}`);
   return {
     id: `generic-${step.type}`,
-    name: step.label || step.type,
+    name: step.machine || step.label || step.type,
     stationType: step.type,
     footprint: { ...footprint, h: recipe.size.h },
     recipe,

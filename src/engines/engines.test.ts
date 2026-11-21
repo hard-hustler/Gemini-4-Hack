@@ -208,3 +208,30 @@ describe('free-form machine models', () => {
     expect((b.min[0] + b.max[0]) / 2).toBeCloseTo(0, 2);
   });
 });
+
+describe('conveyor routing', () => {
+  const belt: FactorySpec = { ...workshop, transport: 'conveyor' };
+  it('lays shared belt once, so the belt is shorter than the sum of the paths riding it', () => {
+    const fork = route(workshop);
+    const conv = route(belt);
+    expect(conv.missing).toEqual([]);
+    expect(conv.forklift.length).toBe(fork.forklift.length);
+    const ridden = conv.forklift.reduce((t, p) => t + p.length, 0);
+    expect(conv.totals.pathM).toBeGreaterThan(0);
+    expect(conv.totals.pathM).toBeLessThanOrEqual(ridden);
+  });
+  it('still connects every leg end to end with axis-aligned runs', () => {
+    for (const p of route(belt).forklift) {
+      expect(p.points.length).toBeGreaterThanOrEqual(1);
+      for (let i = 1; i < p.points.length; i++) {
+        const a = p.points[i - 1];
+        const b = p.points[i];
+        expect(a.x === b.x || a.y === b.y).toBe(true);
+      }
+    }
+  });
+  it('never makes a unit travel further than twice the forklift route', () => {
+    // sharing a trunk is a detour, and the simulator charges for it: keep the detour bounded
+    expect(route(belt).totals.forkliftM).toBeLessThanOrEqual(route(workshop).totals.forkliftM * 2);
+  });
+});

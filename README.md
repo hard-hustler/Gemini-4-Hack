@@ -85,7 +85,8 @@ plant takes a different path through the harness:
 Tested on "a car assembly plant that builds 30 compact electric cars an hour":
 sized as a plant, researched, planned as 20 steps in 5 departments (60
 stations, 180 x 120 m), every machine designed by the swarm (54 to 101 parts
-each), simulated at 27.9 cars an hour against 30.
+each), simulated at 26.9 cars an hour against 30 once laid out across the
+whole floor.
 
 ## Demos
 
@@ -95,17 +96,25 @@ needed: the electric car plant, a CNC machine shop, an espresso grinder
 workshop equipped from real Shop listings, and the built-in light assembly
 floor.
 
-The machine shop is the mid-size story. One paragraph asking for 60 aluminium
-bike-light housings an hour was sized as a line, researched and planned at 30
-stations; the checker flagged three steps the brief never asked for and they
-were removed. Eleven agents then went to Shop: nine came back with a real
-listing (a Hitachi Seiki CNC lathe, a Langmuir MR-1 gantry mill, a KAKA
-bandsaw, an OMTech fibre laser marker and others) and modelled it from the
-listing photo; the parts washer and the CMM had no listing that fit, so those
-two were designed from the process. Every listing is linked from the sourcing
-view and the equipment list. Widened to 45 x 30 m and laid out with conveyors it
-simulates at 59.7 parts an hour against 60. The brief that recreates it is the
-"CNC machine shop" example on the brief screen. To add one, open a
+The machine shop is the mid-size story, and its brief is two things: a
+paragraph and a paper sketch (`public/img/machine-shop-sketch.jpg`). The
+"CNC machine shop" example on the brief screen loads both. From them the
+planner sized the job as a line and read all 27 boxes off the sketch, at the
+positions drawn; the checker found every one of the 11 steps in the brief.
+Eleven agents then went to Shop and each came back with a real listing (a
+Hitachi Seiki CNC lathe, a Jet CNC vertical mill, a Helmel CMM, a 3-stage
+conveyor parts washer, a fibre laser marker and others), modelled from the
+listing photo. Every listing is linked from the sourcing view and the
+equipment list. Placed as drawn on 45 x 30 m, it simulates at 60.4 parts an
+hour against 60.
+
+Conveyors share belt. Each path prefers stretches already laid in its
+direction and pays for every turn (`trunkPath` in `src/engines/grid.ts`), so a
+floor gets a few straight trunks with short spurs instead of one belt per pair
+of machines. The belt is costed once however many paths ride it: the machine
+shop went from 531 m of belt to 164 m, the car plant from 2,738 m to 1,035 m.
+
+To add one, open a
 project with `?capture` in the URL and post it to `/api/dev/save` (a dev-only
 endpoint that writes under `public/demos` and `public/img`). The images on the
 landing page were captured the same way; all are renders of the harness's own

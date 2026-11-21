@@ -104,6 +104,8 @@ export interface ShopListing {
 export interface ProcessStep {
   type: string;
   label: string;
+  /** the equipment that does the step, named as a buyer would search for it: "CNC lathe", not "CNC turning" */
+  machine?: string;
   count: number;
   cycleTimeSec: number;
   operators: number;
@@ -141,6 +143,8 @@ export interface Requirements {
 export interface EquipmentLine {
   stepType: string;
   label: string;
+  /** what to search a marketplace for when sourcing this step */
+  machine?: string;
   qty: number;
   item: CatalogItem;
   /** Decisions API: probability that the brief really asks for this step */

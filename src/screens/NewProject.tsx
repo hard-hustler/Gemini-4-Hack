@@ -11,10 +11,12 @@ interface Attachment {
   data: string;
 }
 
-const EXAMPLES = [
+const EXAMPLES: { label: string; text: string; sketch?: string }[] = [
   {
     label: 'CNC machine shop',
-    text: 'A machine shop that makes 60 machined aluminium bike-light housings an hour on compact CNC machines. Aluminium bar stock arrives at the west dock and is stored on pallet racks, cut to length on metal-cutting bandsaws, turned on CNC lathes (about 4 minutes a part), milled on CNC milling machines (about 9 minutes a part), tumbled in vibratory deburring machines, cleaned in parts washers, measured on coordinate measuring machines, serial-numbered on fibre laser marking machines, then packed and shipped from the east dock. One production line of about 27 stations on a floor 45 by 30 metres, with wide aisles.',
+    text: 'A machine shop that makes 60 machined aluminium bike-light housings an hour, laid out as in the attached sketch on a 45 by 30 metre floor. Aluminium bar stock arrives at the west dock, is checked in at a receiving desk and stored on pallet racks, cut to length on a metal-cutting bandsaw, turned on CNC lathes (about 4 minutes a part), milled on CNC milling machines (about 9 minutes a part), tumbled in vibratory deburring machines, cleaned in a parts washer, measured on coordinate measuring machines, serial-numbered on a fibre laser marking machine, then packed and palletised for shipping at the east dock. Parts move between steps on conveyors.',
+    // the brief is two things: this text and a paper sketch of where each machine stands
+    sketch: '/img/machine-shop-sketch.jpg',
   },
   {
     label: 'Espresso grinder line',
@@ -41,10 +43,13 @@ export function NewProject({ onHome, onCreated, initialText = '' }: { onHome: ()
     for (const f of Array.from(list)) added.push({ name: f.name, mimeType: f.type || 'application/octet-stream', data: await fileToBase64(f) });
     setFiles((cur) => [...cur, ...added]);
   };
-  const addSampleSketch = async () => {
-    const data = await fileToBase64(await (await fetch('/sample-sketch.png')).blob());
-    setFiles((cur) => [...cur.filter((f) => f.name !== 'floor-sketch.png'), { name: 'floor-sketch.png', mimeType: 'image/png', data }]);
+  const addSketch = async (url: string) => {
+    const blob = await (await fetch(url)).blob();
+    const data = await fileToBase64(blob);
+    // one sketch at a time: a second drawing of a different floor would only confuse the planner
+    setFiles((cur) => [...cur.filter((f) => !f.name.startsWith('floor-sketch.')), { name: `floor-sketch.${url.split('.').pop()}`, mimeType: blob.type || 'image/png', data }]);
   };
+  const addSampleSketch = () => addSketch('/sample-sketch.png');
   const toggleMic = async () => {
     setError(null);
     if (recording && recorder.current) {
@@ -157,7 +162,16 @@ export function NewProject({ onHome, onCreated, initialText = '' }: { onHome: ()
         <div className="examples">
           Try
           {EXAMPLES.map((ex) => (
-            <button key={ex.label} className="ghost sm" disabled={busy} onClick={() => setText(ex.text)}>
+            <button
+              key={ex.label}
+              className="ghost sm"
+              disabled={busy}
+              onClick={() => {
+                setText(ex.text);
+                if (ex.sketch) void addSketch(ex.sketch);
+                else setFiles((cur) => cur.filter((f) => !f.name.startsWith('floor-sketch.')));
+              }}
+            >
               {ex.label}
             </button>
           ))}

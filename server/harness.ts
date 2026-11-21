@@ -39,6 +39,7 @@ const stepSchema = {
   properties: {
     type: { type: 'string', description: 'one lowercase word: storage, prep, assembly, test, pack, weld, paint, inspect, label, kitting, conveyor, or another' },
     label: { type: 'string', description: 'short human name, e.g. "Final assembly"' },
+    machine: { type: 'string', description: 'the equipment that does this step, named as a buyer would search for it: "CNC lathe", "parts washer", "packing bench". A noun, never the activity.' },
     count: { type: 'integer', description: 'how many stations of this type' },
     cycleTimeSec: { type: 'number', description: 'seconds per unit at one station' },
     operators: { type: 'integer' },
@@ -48,7 +49,7 @@ const stepSchema = {
     d: { type: 'number', description: 'rough station depth in metres' },
     zone: { type: 'string', description: 'the department this step belongs to, e.g. "Body shop". One short name; the same for every step of that department. Empty for a single workshop.' },
   },
-  required: ['type', 'label', 'count', 'cycleTimeSec', 'operators', 'powerKw', 'needsWater', 'w', 'd', 'zone'],
+  required: ['type', 'label', 'machine', 'count', 'cycleTimeSec', 'operators', 'powerKw', 'needsWater', 'w', 'd', 'zone'],
 };
 
 const requirementsSchema = {
@@ -79,19 +80,25 @@ You decide WHAT is needed: the process steps in order, how many stations each st
 Station counts: if the brief gives a count for a step, use exactly that count, even if it looks too low for the demand; the simulator will show the shortfall and that is the point. Only when the brief gives no count, size it as ceil(demandPerHour * cycleTimeSec / 3600 / 0.85).
 Typical cycle times (s): storage 20, kitting 50, prep 80, assembly 200, weld 150, paint 180, test 90, inspect 60, label 30, pack 70. Typical station footprint is 2 to 3 m wide by 1 to 2 m deep.
 If the brief gives no floor size, choose one that fits the equipment with room for 1.2 m aisles (roughly five times the total equipment footprint) and say so in assumptions. North is the top of any drawing.
-If the brief does not say where docks or utilities are, pick sensible walls and list each as an assumption. Do not invent steps the brief does not ask for or imply.`;
+If the brief does not say where docks or utilities are, pick sensible walls and list each as an assumption. Do not invent steps the brief does not ask for or imply.
+For each step, "label" is the activity ("CNC turning") and "machine" is the equipment a buyer would search a catalog for ("CNC lathe", "parts washer", "coordinate measuring machine"). The machine name is what gets searched on a marketplace, so make it a plain product noun.
+If the brief includes a drawing of the floor, "sketch" has one entry for every box drawn: five boxes of the same machine are five entries with the same type, each at its own position. Read positions off the drawing; do not tidy them.`;
 
 /** Added to the planner's instructions when the brief is a production line or a whole plant. */
-const PLANT_SYSTEM = `
-This brief is for a large operation, not a workshop. Plan it as a plant:
+const largeSystem = (scale: 'line' | 'plant') => `
+This brief is for ${scale === 'plant' ? 'a whole plant' : 'a production line'}, not a workshop. Plan it as one:
 - Use the research notes. They say how this product is really made; follow their departments and steps rather than guessing.
 - Group the steps into departments with the "zone" field, in the order material flows through them (for a car plant: Stamping, Body shop, Paint shop, General assembly, Final inspection). Every step has a zone.
-- Use 14 to 30 steps in total. Each step is one kind of station; "type" is one unique lowercase word made of letters (bodyframing, ecoat, marriage), and "label" is the human name.
+- ${
+  scale === 'plant'
+    ? 'Use 14 to 30 steps in total.'
+    : 'Use the steps the brief names, in its order: usually 8 to 16. Do not pad the line with staging, buffer, gauging, drying or handling steps that neither the brief nor the research asks for; an independent checker removes steps it cannot find in the brief.'
+} Each step is one kind of station; "type" is one unique lowercase word made of letters (bodyframing, ecoat, marriage), and "label" is the human name.
 - Size each step by takt: count = ceil(demandPerHour * cycleTimeSec / 3600 / 0.85), between 1 and 40. Slow processes (ovens, curing, framing) need many stations in parallel; fast ones need one or two.
 - Give each step a realistic single-station footprint (w, d up to 12 m) and power draw from the research.
 - transport is "conveyor".
-- Choose a floor that holds everything with aisles: about four times the total equipment footprint, wider than deep (for example 150 by 90 m), and say so in assumptions.
-- sketch is empty.`;
+- If the brief gives a floor size, use it. Otherwise choose a floor that holds everything with aisles: about four times the total equipment footprint, wider than deep (for example 150 by 90 m), and say so in assumptions.
+- sketch is empty unless the brief includes a drawing of the floor.`;
 
 function clean(raw: any): Requirements {
   const num = (v: unknown, f: number) => (typeof v === 'number' && Number.isFinite(v) ? v : f);
@@ -111,6 +118,7 @@ function clean(raw: any): Requirements {
     steps.push({
       type,
       label: String(s?.label ?? type),
+      machine: typeof s?.machine === 'string' && s.machine.trim() ? s.machine.trim().slice(0, 60) : undefined,
       count: Math.round(num(s?.count, 1)),
       cycleTimeSec: num(s?.cycleTimeSec, 60),
       operators: Math.max(0, Math.round(num(s?.operators, 1))),
@@ -244,7 +252,7 @@ Take every number you can from the search results, and say "estimate" where you 
     }
   }
   const evidence: Block[] = research ? [...brief, { type: 'text', text: `\nResearch notes on how this is made:\n${research.summary}\n` }] : brief;
-  const system = large ? PLAN_SYSTEM + PLANT_SYSTEM : PLAN_SYSTEM;
+  const system = scale === 'workshop' ? PLAN_SYSTEM : PLAN_SYSTEM + largeSystem(scale);
 
   const steps: Step[] = [{ type: 'user_input', content: [...evidence, { type: 'text', text: 'Emit the requirements for this brief.' }] }];
   let req: Requirements | null = null;
@@ -283,7 +291,7 @@ Take every number you can from the search results, and say "estimate" where you 
   let coverage: number | undefined;
   for (let round = 0; round < 2; round++) {
     const t0 = Date.now();
-    equipment = req.steps.map((s) => ({ stepType: s.type, label: s.label, qty: s.count, item: pickItem(s) }));
+    equipment = req.steps.map((s) => ({ stepType: s.type, label: s.label, machine: s.machine, qty: s.count, item: pickItem(s) }));
     const generic = equipment.filter((l) => l.item.id.startsWith('generic-')).length;
     log({ stage: 'equip', actor: 'engine', title: 'Matched equipment from the catalog', detail: `${equipment.length - generic} catalog items${generic ? `, ${generic} generic placeholder${generic > 1 ? 's' : ''}` : ''}`, ms: Date.now() - t0, status: 'ok' });
 

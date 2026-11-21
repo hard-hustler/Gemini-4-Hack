@@ -162,7 +162,17 @@ const BELT_W = 0.8;
 export function Conveyors({ spec, routes, animate }: { spec: FactorySpec; routes: Routes; animate: boolean }) {
   const { width, depth } = spec.floor;
   const data = useMemo(() => {
-    const segs: { x: number; z: number; len: number; alongX: boolean }[] = [];
+    // Paths share trunks, so the belt is drawn from the set of unit steps any path takes: each
+    // stretch once, with collinear steps joined into one long run.
+    const cell = spec.floor.cellSize;
+    const key = (v: number) => Math.round(v * 100);
+    const along = new Map<number, Set<number>>(); // z -> x of each unit step running east-west
+    const across = new Map<number, Set<number>>(); // x -> z of each unit step running north-south
+    const add = (m: Map<number, Set<number>>, line: number, at: number) => {
+      const set = m.get(line) ?? new Set<number>();
+      set.add(at);
+      m.set(line, set);
+    };
     const paths: { pts: THREE.Vector3[]; cum: number[]; total: number }[] = [];
     for (const p of routes.forklift) {
       const pts = p.points.map((q) => new THREE.Vector3(q.x - width / 2, BED_Y, q.y - depth / 2));
@@ -172,10 +182,32 @@ export function Conveyors({ spec, routes, animate }: { spec: FactorySpec; routes
         const b = pts[i];
         const len = a.distanceTo(b);
         cum.push(cum[i - 1] + len);
-        if (len > 0.01) segs.push({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2, len, alongX: Math.abs(b.x - a.x) > Math.abs(b.z - a.z) });
+        const n = Math.round(len / cell);
+        const alongX = Math.abs(b.x - a.x) > Math.abs(b.z - a.z);
+        for (let k = 0; k < n; k++) {
+          if (alongX) add(along, key(a.z), key(Math.min(a.x, b.x) + k * cell));
+          else add(across, key(a.x), key(Math.min(a.z, b.z) + k * cell));
+        }
       }
       if (cum[cum.length - 1] > 0.5) paths.push({ pts, cum, total: cum[cum.length - 1] });
     }
+    const segs: { x: number; z: number; len: number; alongX: boolean }[] = [];
+    const runs = (m: Map<number, Set<number>>, alongX: boolean) => {
+      const step = key(cell);
+      for (const [line, set] of m) {
+        const at = [...set].sort((x, y) => x - y);
+        let start = at[0];
+        for (let i = 1; i <= at.length; i++) {
+          if (i < at.length && at[i] - at[i - 1] <= step + 1) continue;
+          const from = start / 100;
+          const to = at[i - 1] / 100 + cell;
+          segs.push(alongX ? { x: (from + to) / 2, z: line / 100, len: to - from, alongX } : { x: line / 100, z: (from + to) / 2, len: to - from, alongX });
+          start = at[i];
+        }
+      }
+    };
+    runs(along, true);
+    runs(across, false);
     const legs: [number, number][] = [];
     for (const s of segs) {
       const n = Math.max(1, Math.round(s.len / 3));
@@ -184,15 +216,15 @@ export function Conveyors({ spec, routes, animate }: { spec: FactorySpec; routes
         legs.push(s.alongX ? [s.x + t, s.z] : [s.x, s.z + t]);
       }
     }
-    // one item roughly every 5 m of belt, capped so the frame loop stays cheap
+    // a few packages, spaced well apart: enough to show the flow without burying the belt
     const items: { path: number; offset: number }[] = [];
     const totalLen = paths.reduce((t, p) => t + p.total, 0);
-    const spacing = Math.max(5, totalLen / 320);
+    const spacing = Math.max(14, totalLen / 70);
     paths.forEach((p, i) => {
-      for (let o = (i * 1.7) % spacing; o < p.total; o += spacing) items.push({ path: i, offset: o });
+      for (let o = (i * 5.3) % spacing; o < p.total; o += spacing) items.push({ path: i, offset: o });
     });
     return { segs, paths, legs, items };
-  }, [routes, width, depth]);
+  }, [routes, width, depth, spec.floor.cellSize]);
 
   const beds = useRef<THREE.InstancedMesh>(null);
   const belts = useRef<THREE.InstancedMesh>(null);

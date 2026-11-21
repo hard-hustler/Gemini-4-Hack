@@ -89,7 +89,7 @@ export function Swarm({
       if (e.status === 'running') return patch(key, () => ({ live: e.title }));
       patch(key, (a) => ({ live: undefined, log: [...a.log, { text: e.detail ? `${e.title}: ${e.detail}` : e.title, tone: e.status === 'fail' ? 'fail' : e.status === 'retry' ? 'retry' : 'ok' }] }));
     };
-    const step = { type: line.stepType, label: line.label, itemName: line.item.source === 'builtin' ? line.item.name : line.label, cycleTimeSec: line.item.cycleTimeSec, operators: line.item.operators, w: line.item.footprint.w, d: line.item.footprint.d, context };
+    const step = { type: line.stepType, label: line.label, itemName: line.machine ?? (line.item.source === 'builtin' ? line.item.name : line.label), cycleTimeSec: line.item.cycleTimeSec, operators: line.item.operators, w: line.item.footprint.w, d: line.item.footprint.d, context };
     const imagined: ShopListing = { title: step.itemName, seller: 'Designed from the process', price: line.item.price, currency: 'USD', url: '', variantId: `concept-${line.stepType}`, description: `${step.itemName} for the ${line.label} step. ${context ?? ''}` };
     const began = Date.now();
     try {

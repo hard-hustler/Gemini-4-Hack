@@ -1,5 +1,5 @@
 import { centre, dockPoint, inboundDock, outboundDock, type FactorySpec, type Point } from '../spec';
-import { accessCells, astar, buildGrid, cellCentre, dockCell, type Cell, type Grid } from './grid';
+import { accessCells, astar, beltLength, buildGrid, cellCentre, dockCell, layBelt, trunkPath, type Cell, type Grid } from './grid';
 
 export interface ForkliftPath {
   from: string;
@@ -24,7 +24,7 @@ export interface Routes {
   missing: { from: string; to: string }[];
   power: UtilityRun[];
   water: UtilityRun[];
-  /** forkliftM is the mean distance one unit travels; pathM is the length of every drawn path (what conveyor would cost) */
+  /** forkliftM is the mean distance one unit travels; pathM is the length of every drawn path, or with conveyors the metres of belt (shared stretches counted once) */
   totals: { forkliftM: number; powerM: number; waterM: number; pathM: number };
 }
 
@@ -90,28 +90,39 @@ export function route(spec: FactorySpec): Routes {
   const missing: Routes['missing'] = [];
   const legLengths: number[] = [];
 
+  // Conveyors share belt: each path prefers stretches already laid, so the floor gets a few
+  // trunks with short spurs instead of one belt per pair of machines. Forklifts take the shortest way.
+  const conveyor = spec.transport === 'conveyor';
+  const laid = new Set<number>();
+
   for (let leg = 0; leg < stages.length - 1; leg++) {
     const lens: number[] = [];
+    const prev = stages[leg];
     const next = stages[leg + 1];
     const goals = next.flatMap((b) => b.cells);
     const owner = new Map<number, string>();
     for (const b of next) for (const c of b.cells) owner.set(c.r * grid.cols + c.c, b.name);
+    const source = new Map<number, string>();
+    for (const a of prev) for (const c of a.cells) if (!source.has(c.r * grid.cols + c.c)) source.set(c.r * grid.cols + c.c, a.name);
     const served = new Set<string>();
-    const run = (from: Node, to: Cell[], name?: string) => {
-      const cells = astar(grid, from.cells, to);
-      if (!cells) return void missing.push({ from: from.name, to: name ?? next[0]?.name ?? 'next step' });
+    const run = (from: Node[], to: Cell[], name?: string) => {
+      const starts = from.flatMap((a) => a.cells);
+      const cells = conveyor ? trunkPath(grid, starts, to, laid) : astar(grid, starts, to);
+      if (!cells) return void missing.push({ from: from[0].name, to: name ?? next[0]?.name ?? 'next step' });
+      if (conveyor) layBelt(grid, cells, laid);
       const end = cells[cells.length - 1];
       const target = name ?? owner.get(end.r * grid.cols + end.c) ?? next[0].name;
       served.add(target);
       const points = simplify(cells.map((c) => cellCentre(grid, c.c, c.r)));
       const length = pathLength(points);
       lens.push(length);
-      forklift.push({ from: from.name, to: target, leg, points, length });
+      forklift.push({ from: from.length === 1 ? from[0].name : (source.get(cells[0].r * grid.cols + cells[0].c) ?? from[0].name), to: target, leg, points, length });
     };
     // One path per source, to whichever station of the next step is nearest: this is what
-    // keeps a 100-station plant routable. Then any station nobody feeds gets a path of its own.
-    for (const a of stages[leg]) run(a, goals);
-    for (const b of next) if (!served.has(b.name) && stages[leg][0]) run(stages[leg][0], b.cells, b.name);
+    // keeps a 100-station plant routable. Then any station nobody feeds gets a path of its own:
+    // by forklift from the step's first station, by conveyor from whichever source is cheapest to tap.
+    for (const a of prev) run([a], goals);
+    for (const b of next) if (!served.has(b.name) && prev[0]) run(conveyor ? prev : [prev[0]], b.cells, b.name);
     legLengths.push(lens.length ? lens.reduce((x, y) => x + y, 0) / lens.length : 0);
   }
 
@@ -125,7 +136,7 @@ export function route(spec: FactorySpec): Routes {
     missing,
     power,
     water,
-    totals: { forkliftM: legLengths.reduce((a, b) => a + b, 0), powerM: sum(power), waterM: sum(water), pathM: sum(forklift) },
+    totals: { forkliftM: legLengths.reduce((a, b) => a + b, 0), powerM: sum(power), waterM: sum(water), pathM: conveyor ? beltLength(grid, laid) : sum(forklift) },
   };
 }
 
