@@ -644,8 +644,9 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     return [...map.values()];
   }, [draft]);
   /**
-   * Buy: straight to the seller's checkout, where payment is approved. The window is opened inside the
-   * click (browsers block it otherwise) and pointed at the checkout as soon as Shop has created it.
+   * Buy: straight to Shop's review page, where the buyer sees the amount and the merchant and taps
+   * Approve. The window is opened inside the click (browsers block it otherwise) and pointed at the
+   * page as soon as Shop has created the checkout.
    */
   const buy = async (r: { name: string; qty: number; checkoutUrl?: string }) => {
     if (!r.checkoutUrl) return;
@@ -655,11 +656,14 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     if (popup) {
       popup.document.title = 'Checkout';
       popup.document.body.style.cssText = 'margin:0;height:100vh;display:grid;place-items:center;font:15px system-ui,sans-serif;color:#26282a;background:#faf6ee;text-align:center;padding:24px;box-sizing:border-box';
-      popup.document.body.textContent = `Opening secure checkout for ${r.qty} × ${r.name}…`;
+      popup.document.body.textContent = `Asking Shop to approve ${r.qty} × ${r.name}…`;
     }
     setBuying(r.checkoutUrl);
     try {
-      const out = await api<{ url: string }>('/api/shop/checkout', { buyUrl: r.checkoutUrl, quantity: r.qty });
+      const out = await api<{ url: string; quantity: number }>('/api/shop/checkout', { buyUrl: r.checkoutUrl, quantity: r.qty });
+      if (out.quantity < r.qty) {
+        setNotice({ tone: 'error', title: `This seller has ${out.quantity} of the ${r.qty} ${r.name} the plan needs`, lines: [`The approval is for ${out.quantity}. Find another seller for the other ${r.qty - out.quantity}.`] });
+      }
       if (popup && !popup.closed) popup.location.replace(out.url);
       else if (!window.open(out.url, '_blank')) setBlocked((cur) => ({ ...cur, [r.checkoutUrl as string]: out.url }));
     } catch (e) {
@@ -1113,7 +1117,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                       Open checkout
                     </a>
                   ) : r.checkoutUrl ? (
-                    <button className="ghost sm" disabled={buying !== null} onClick={() => void buy(r)} title={`Open checkout for ${r.qty} at the seller`}>
+                    <button className="ghost sm" disabled={buying !== null} onClick={() => void buy(r)} title={`Approve payment for ${r.qty} in Shop`}>
                       {buying === r.checkoutUrl ? <span className="spinner ink" /> : 'Buy'}
                     </button>
                   ) : r.listingUrl ? (

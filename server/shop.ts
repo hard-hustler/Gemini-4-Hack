@@ -37,7 +37,7 @@ export interface ShopOption {
 }
 
 /** One Shop MCP tool call. Only the tools named here can be reached; nothing that pays or completes an order is. */
-async function callShopTool(name: 'search_catalog' | 'create_checkout', args: object): Promise<any> {
+async function callShopTool(name: 'search_catalog' | 'lookup_catalog' | 'create_checkout', args: object): Promise<any> {
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: {
@@ -57,7 +57,7 @@ async function callShopTool(name: 'search_catalog' | 'create_checkout', args: ob
         arguments: args,
         _meta: {
           'io.modelcontextprotocol/protocolVersion': PROTOCOL,
-          'io.modelcontextprotocol/clientInfo': { name: 'dry-run', version: '0.1.0' },
+          'io.modelcontextprotocol/clientInfo': { name: 'Dry Run', version: '0.1.0' },
           'io.modelcontextprotocol/clientCapabilities': {},
         },
       },
@@ -75,20 +75,52 @@ export async function searchCatalog(query: string, limit: number): Promise<any[]
 }
 
 export interface Checkout {
-  /** the merchant's own secure checkout page: where the buyer reviews the order and approves payment */
+  /** where the buyer reviews the order and approves payment */
   url: string;
   seller: string;
   currency?: string;
   /** order total in the currency's minor units, as the merchant states it before shipping and tax */
   totalMinor?: number;
-  /** true when Shop could not create a checkout and the listing's direct buy link is used instead */
-  direct: boolean;
+  /**
+   * "approve": Shop's own review page (shop.app), where a signed-in shopper sees the amount, the
+   * merchant and their saved card, and taps Approve. "merchant": the seller's ordinary checkout,
+   * with its Pay now button, used only when Shop could not give a review page.
+   */
+  kind: 'approve' | 'merchant';
+  /** how many units the checkout is for: fewer than asked when the seller has fewer in stock */
+  quantity: number;
+}
+
+const sellerDomains = new Map<string, string>();
+
+/**
+ * The seller's Shop domain for a variant (store.myshopify.com). Shop's checkout has to be opened
+ * against this exact domain, as search returns it in seller.domain; a listing saved before we kept
+ * it is looked up again by its variant id.
+ */
+async function sellerDomainOf(variantGid: string): Promise<string | null> {
+  const known = sellerDomains.get(variantGid);
+  if (known) return known;
+  const doc = await callShopTool('lookup_catalog', { catalog: { ids: [variantGid], context: { address_country: 'US', currency: 'USD' } } });
+  for (const product of Array.isArray(doc.products) ? doc.products : []) {
+    for (const v of Array.isArray(product?.variants) ? product.variants : []) {
+      const domain = v?.seller?.domain;
+      if (v?.id === variantGid && typeof domain === 'string' && /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(domain)) {
+        if (sellerDomains.size > 2000) sellerDomains.clear();
+        sellerDomains.set(variantGid, domain);
+        return domain;
+      }
+    }
+  }
+  return null;
 }
 
 /**
- * Buy: turn a listing's buy link into a checkout at its merchant, for the quantity the plan needs.
- * This creates an unpaid checkout and returns where to open it. It never pays: the buyer approves
- * payment on the merchant's page. The merchant and variant are read from the link Shop itself gave us.
+ * Buy: open a checkout for a listing at the quantity the plan needs, and return Shop's review page
+ * for it: "Pay $X to the merchant", Decline, Approve. That page is what create_checkout returns when
+ * it is called with the seller's Shop domain; called with the storefront's hostname it returns the
+ * merchant's ordinary cart link instead, which ends in a Pay now button.
+ * Nothing here pays. The buyer approves in Shop. The variant is read from the buy link Shop gave us.
  */
 export async function createCheckout(buyUrl: string, quantity: number): Promise<Checkout> {
   let link: URL;
@@ -100,23 +132,36 @@ export async function createCheckout(buyUrl: string, quantity: number): Promise<
   const variant = /^\/buy\/(\d+):\d+$/.exec(link.pathname)?.[1];
   if (link.protocol !== 'https:' || !variant) throw new Error('This item has no buy link. Open its listing instead.');
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) throw new Error('Quantity must be between 1 and 100.');
-  const seller = link.hostname;
+  const storefront = link.hostname;
+  const gid = `gid://shopify/ProductVariant/${variant}`;
   link.pathname = `/buy/${variant}:${quantity}`;
-  const direct: Checkout = { url: link.toString(), seller, direct: true };
+  const direct: Checkout = { url: link.toString(), seller: storefront, kind: 'merchant', quantity };
+
+  const domain = await sellerDomainOf(gid).catch(() => null);
   try {
     const doc = await callShopTool('create_checkout', {
-      shop: seller,
-      checkout: { line_items: [{ item: { id: `gid://shopify/ProductVariant/${variant}` }, quantity }], context: { address_country: 'US' } },
+      shop: domain ?? storefront,
+      checkout: { line_items: [{ item: { id: gid }, quantity }], context: { address_country: 'US' } },
       meta: { 'idempotency-key': randomUUID() },
     });
-    // trust the checkout only if it is the order that was asked for, at a Shopify or merchant address
+    // trust the checkout only if it is the order that was asked for, at a Shop, Shopify or merchant address
     const line = Array.isArray(doc.line_items) && doc.line_items.length === 1 ? doc.line_items[0] : null;
     const url = new URL(String(doc.continue_url));
     const host = url.hostname;
-    const safeHost = host === seller || host === 'shop.app' || host === 'checkout.shopify.com' || host.endsWith('.myshopify.com');
-    if (!line || !String(line.item?.id ?? '').endsWith(`/${variant}`) || line.quantity !== quantity || url.protocol !== 'https:' || !safeHost || !/^\/(checkouts?|cart\/c)\//.test(url.pathname)) return direct;
+    const safeHost = host === storefront || host === domain || host === 'shop.app' || host === 'checkout.shopify.com' || host.endsWith('.myshopify.com');
+    // A seller with fewer in stock than the plan needs gets a checkout for what it has: that is still
+    // the right page to approve, as long as the buyer is told. Anything else unexpected is not trusted.
+    const units = Number(line?.quantity);
+    if (!line || line.item?.id !== gid || !Number.isInteger(units) || units < 1 || units > quantity || url.protocol !== 'https:' || !safeHost || !/^\/(checkouts?|cart\/c)\//.test(url.pathname)) return direct;
     const total = (Array.isArray(doc.totals) ? doc.totals : []).find((t: any) => t?.type === 'total');
-    return { url: url.toString(), seller, currency: typeof doc.currency === 'string' ? doc.currency : undefined, totalMinor: Number.isSafeInteger(total?.amount) ? total.amount : undefined, direct: false };
+    return {
+      url: url.toString(),
+      seller: domain ?? storefront,
+      currency: typeof doc.currency === 'string' ? doc.currency : undefined,
+      totalMinor: Number.isSafeInteger(total?.amount) ? total.amount : undefined,
+      kind: host === 'shop.app' ? 'approve' : 'merchant',
+      quantity: units,
+    };
   } catch {
     return direct;
   }

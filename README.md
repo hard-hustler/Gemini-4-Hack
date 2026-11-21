@@ -159,13 +159,16 @@ belt conveyor cannot carry a body-in-white through a dip tank.
 
 ## Buying
 
-Buy in the Equipment tab goes straight to the seller. The server asks Shop to
-create a checkout for that listing at the quantity the plan needs
-(`create_checkout`, as worked out on the `lindsey/shopify-changes` branch) and
-the app opens the seller's own checkout page in a window, where the order is
-reviewed and payment approved. The app never pays and never sees card details.
-If Shop cannot create the checkout, the listing's direct buy link is opened
-instead. The improve loop and the sandbox search are still on the server
+Buy in the Equipment tab goes straight to Shop's review page: "Pay $X to the
+merchant", with Decline and Approve, for a shopper signed in to Shop. The
+server looks up the listing's seller domain (`lookup_catalog`, by variant id),
+asks Shop to create a checkout against that domain at the quantity the plan
+needs (`create_checkout`), and the app opens the `shop.app` link that comes
+back in a window. The seller's Shop domain matters: called with the
+storefront's hostname instead, `create_checkout` returns the merchant's
+ordinary cart link, which ends in a Pay now button. The app never pays and
+never sees card details. If Shop cannot create the checkout, the listing's
+direct buy link is opened instead. The improve loop and the sandbox search are still on the server
 (`/api/improve`, `/api/deep-search`) but no longer have a tab.
 
 ## Demos
