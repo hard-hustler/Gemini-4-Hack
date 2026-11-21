@@ -13,6 +13,7 @@
 
 import type { AdvocateReport, Emit, Requirements } from '../src/contracts';
 import { ADVOCATE_CHARACTERS } from '../src/engines/advocate';
+import { cloneStation } from '../src/engines/place';
 import { localSearch, opsBetween } from '../src/engines/search';
 import { validate } from '../src/engines/validate';
 import { compare, evaluate, type Metrics } from '../src/engines/versions';
@@ -98,8 +99,8 @@ export async function improveToGoal(start: FactorySpec, goal: Goal, emit: Emit, 
 Goal: ${GOALS[goal].brief} Throughput must not fall below demand.
 Devil's Advocate constraints: keep stations either flush against outer walls (0 m) or at least 1.5 m clear (avoid 0.2–1.1 m wall pinch traps); preserve service access on powered machines; maintain +20% surge headroom where possible.
 Learn from the history: do not repeat a change that was rejected, vetoed, or made things worse; build on what was kept.
-Levers: shorten forklift legs by putting consecutive steps near each other and near the right dock; shorten power and water runs; relieve the busiest resource. Adding a station or a forklift costs money every hour or up front, so use it only when the layout alone cannot meet demand.
-Ops: move {id,x,y}; rotate {id,rot}; add {station}; remove {id}; moveDock {index,wall,offset}; setParam {path,value} (path: forklifts or stations.<id>.<field>). Set fields an op does not use to null. Do not change demandPerHour or costs.
+Levers: shorten travel by putting consecutive steps near each other and near the right dock; shorten power and water runs; relieve the busiest step. When throughput is below demand, the fix is capacity at the bottleneck: clone a station of the busiest step. A clone costs money up front and an operator every hour, so add only what demand needs.
+Ops: move {id,x,y}; rotate {id,rot}; clone {id} (one more station identical to id; code places it beside the original); remove {id}; moveDock {index,wall,offset}; setParam {path,value} (path: forklifts or stations.<id>.<field>). Do not use add. Set fields an op does not use to null. Do not change demandPerHour or costs.
 ${GEOMETRY_RULES}`;
 
   for (let n = 1; n <= MAX_ROUNDS; n++) {
@@ -125,7 +126,7 @@ ${GEOMETRY_RULES}`;
       for (const raw of proposed) {
         const t: Tried = { name: String(raw?.name ?? 'candidate'), reason: String(raw?.reason ?? ''), source: 'neon', outcome: 'rejected' };
         try {
-          const ops = toOps(Array.isArray(raw?.ops) ? raw.ops : []);
+          const ops = toOps(Array.isArray(raw?.ops) ? raw.ops : [], best.spec);
           if (!ops.length) throw new Error('no ops');
           const next = applyOps(best.spec, ops);
           const errs = validate(next);
@@ -180,7 +181,20 @@ ${GEOMETRY_RULES}`;
     const simStart = Date.now();
     try {
       const baseScore = best.score;
-      const s = localSearch(best.spec, { iters: 160, seed: n, score: (_b, m) => score(m) });
+      // Code's own capacity candidate: one more station at the busiest step, when it is running hot.
+      const [busiest, load] = Object.entries(best.metrics.sim.utilisation).filter(([k]) => k !== 'forklift').sort((x, y) => y[1] - x[1])[0] ?? ['', 0];
+      const short = best.metrics.sim.unitsPerHour.median < start.demandPerHour * 0.98;
+      if (busiest && (short || load >= 0.9)) {
+        const like = best.spec.stations.filter((x) => x.type === busiest).pop();
+        const added = like ? cloneStation(best.spec, like.id) : null;
+        if (added) {
+          const t: Tried = { name: `One more ${busiest} station`, reason: `${busiest} is the busiest step at ${Math.round(load * 100)}%.`, source: 'search', outcome: 'rejected' };
+          pool.push({ t, spec: { ...best.spec, stations: [...best.spec.stations, added] }, ops: [{ op: 'add', station: added }] });
+          tried.push(t);
+        }
+      }
+      // the position search is cheap on a workshop and costly on a plant: fewer steps there
+      const s = localSearch(best.spec, { iters: best.spec.stations.length > 40 ? 40 : 160, seed: n, score: (_b, m) => score(m) });
       if (s.ops.length && s.score < baseScore) pool.push({ t: { name: `Search, seed ${n}`, reason: `Seeded search: ${s.accepted} accepted moves out of ${s.valid} legal ones tried.`, source: 'search', outcome: 'rejected' }, spec: s.spec, ops: s.ops });
       if (s.ops.length && s.score < baseScore) tried.push(pool[pool.length - 1].t);
     } catch {

@@ -1,6 +1,7 @@
 // Model jobs. Loop rule: propose -> validate -> on errors feed them back and retry.
 // Nothing leaves this file unless it passed validate().
 
+import { cloneStation } from '../src/engines/place';
 import { validate, type ValidationError } from '../src/engines/validate';
 import { applyOps, centre, dockPoint, leanSpec, snap, type EditOp, type FactorySpec, type Rot, type Station, type Wall } from '../src/spec';
 import { decide, interact, MODELS, type Block, type Question, type Step } from './gemini';
@@ -82,7 +83,7 @@ export const opsSchema = {
       items: {
         type: 'object',
         properties: {
-          op: { type: 'string', enum: ['move', 'rotate', 'add', 'remove', 'moveDock', 'setParam'] },
+          op: { type: 'string', enum: ['move', 'rotate', 'add', 'clone', 'remove', 'moveDock', 'setParam'] },
           id: { type: ['string', 'null'], description: 'station id for move, rotate, remove' },
           x: { type: ['number', 'null'] },
           y: { type: ['number', 'null'] },
@@ -174,9 +175,35 @@ function normalise(raw: any): FactorySpec {
   };
 }
 
-export function toOps(raw: any[]): EditOp[] {
+/**
+ * Model output -> edit ops. "clone" is resolved here: the model names a station to duplicate and
+ * code finds where the copy can legally stand, so it arrives as an ordinary, already-placed "add".
+ * Pass the spec the ops will be applied to; clones need it.
+ */
+export function toOps(raw: any[], spec?: FactorySpec): EditOp[] {
+  let working = spec;
   return raw.map((o): EditOp => {
+    const op = toOp(o, working);
+    if (working) {
+      try {
+        working = applyOps(working, [op]);
+      } catch {
+        /* the caller applies the ops again and reports the error properly */
+      }
+    }
+    return op;
+  });
+}
+
+function toOp(o: any, spec?: FactorySpec): EditOp {
+  {
     switch (o?.op) {
+      case 'clone': {
+        if (!spec) throw new Error('clone needs the current spec');
+        const station = cloneStation(spec, String(o.id));
+        if (!station) throw new Error(`No room to add another station next to "${o.id}"`);
+        return { op: 'add', station };
+      }
       case 'move':
         return { op: 'move', id: String(o.id), x: snap(Number(o.x), CELL), y: snap(Number(o.y), CELL) };
       case 'rotate':
@@ -192,7 +219,7 @@ export function toOps(raw: any[]): EditOp[] {
       default:
         throw new Error(`Unknown op "${o?.op}"`);
     }
-  });
+  }
 }
 
 /** Hydrogen: sketch photo or document -> FactorySpec, retried against validate(). */
@@ -225,7 +252,7 @@ Read dimensions written on the plan. If the floor size is not given, assume 20 m
 /** Hydrogen: a typed or spoken instruction + the current spec -> edit ops, retried against validate(). */
 export async function editPlan(spec: FactorySpec, command: { text?: string; audio?: Block }) {
   const system = `You edit a factory layout. You are given the current FactorySpec as JSON and one instruction (typed, or spoken in an audio clip). Emit the smallest list of edit ops that carries it out. Never describe the layout in prose.
-Ops: move {id,x,y}; rotate {id,rot}; add {station}; remove {id}; moveDock {index,wall,offset}; setParam {path,value}. Set fields an op does not use to null.
+Ops: move {id,x,y}; rotate {id,rot}; clone {id} (one more station identical to id; code places it beside the original, so use this whenever asked to add another of something that exists); add {station} (only for a kind of station the layout does not have yet); remove {id}; moveDock {index,wall,offset}; setParam {path,value}. Set fields an op does not use to null.
 ${GEOMETRY_RULES}
 ${STATION_DEFAULTS}
 "Move the dock to the north wall" means moveDock for that dock with wall "N" and an offset that keeps it clear of stations. If the instruction names a dock as inbound or outbound, use the dock index with that kind. If the instruction cannot be carried out, emit no ops and say why in reason.`;
@@ -244,7 +271,7 @@ ${STATION_DEFAULTS}
     let next: FactorySpec | null = null;
     let ops: EditOp[] = [];
     try {
-      ops = toOps(Array.isArray(res.json?.ops) ? res.json.ops : []);
+      ops = toOps(Array.isArray(res.json?.ops) ? res.json.ops : [], spec);
       next = applyOps(spec, ops);
       lastErrors = validate(next);
     } catch (e) {

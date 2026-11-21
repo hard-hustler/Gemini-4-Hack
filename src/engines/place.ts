@@ -384,3 +384,29 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
   }
   return { spec: polished, method: 'flow line', polished: score < 1, polishScore: score, variantsTried: tried };
 }
+
+/**
+ * One more station like `id`, placed at the nearest legal spot to the original.
+ * This is how capacity is added: a model asks for a clone, code decides where it goes.
+ * Returns null when the floor has no legal spot within reach.
+ */
+export function cloneStation(spec: FactorySpec, id: string): Station | null {
+  const source = spec.stations.find((s) => s.id === id);
+  if (!source) return null;
+  const cell = spec.floor.cellSize;
+  let n = spec.stations.filter((s) => s.type === source.type).length + 1;
+  while (spec.stations.some((s) => s.id === `${source.type}${n}`)) n++;
+  const placed = spec.stations.map(footprint);
+  const copy: Station = { ...source, id: `${source.type}${n}` };
+  let tries = 0;
+  for (const [dx, dy] of spiral(Math.min(40, Math.ceil(Math.max(spec.floor.width, spec.floor.depth) / cell)))) {
+    if (!dx && !dy) continue;
+    copy.x = source.x + dx * cell;
+    copy.y = source.y + dy * cell;
+    if (!clear(footprint(copy), placed, spec.floor.width, spec.floor.depth)) continue;
+    // the cheap geometry test passed; the full rules (reachability, docks) get the last word
+    if (!validate({ ...spec, stations: [...spec.stations, copy] }).length) return { ...copy };
+    if (++tries > 24) break;
+  }
+  return null;
+}
