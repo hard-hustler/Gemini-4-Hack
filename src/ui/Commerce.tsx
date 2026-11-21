@@ -182,10 +182,32 @@ function MerchantCheckout({ group, session, patchSession, updateQuantity, refres
             <span className="small">{listing.available === true ? 'Available at last lookup' : 'Unavailable or needs a fresh search'} · {formatPrice(listing)} each</span>
             <span className="small cart-variant">{listing.variantId}</span>
           </div>
-          <div className="row">
-            <label className="small cart-quantity">Quantity <input type="number" min={1} max={MAX_CART_QUANTITY} value={quantity} disabled={busy} onChange={(e) => { const quantity = Number(e.target.value); if (quantity >= 1) updateQuantity(cartKey(listing), quantity); }} aria-label={`Quantity of ${listing.title}`} /></label>
+          <div className="row cart-row">
+            <label className="small cart-quantity">
+              Quantity{' '}
+              <input
+                type="number"
+                min={0}
+                max={MAX_CART_QUANTITY}
+                value={quantity}
+                disabled={busy}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  updateQuantity(cartKey(listing), Math.max(0, val));
+                }}
+                aria-label={`Quantity of ${listing.title}`}
+              />
+            </label>
             <strong>{formatPrice(listing, quantity)}</strong>
-            <button className="text sm" disabled={busy} onClick={() => updateQuantity(cartKey(listing), 0)}>Remove</button>
+            <button
+              className="cart-remove-btn"
+              type="button"
+              disabled={busy}
+              onClick={() => updateQuantity(cartKey(listing), 0)}
+              title={`Remove ${listing.title} from cart`}
+            >
+              ✕ Remove
+            </button>
           </div>
           {(listing.messages ?? []).map((message, index) => <p className="small commerce-warning" key={index}>{message}</p>)}
         </div>

@@ -14,7 +14,8 @@ import { formatPrice, priceSubtotals } from '../commerce';
 const WALL = { N: 'north', S: 'south', E: 'east', W: 'west' } as const;
 
 function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () => void; onPick: (item: CatalogItem, trace: TraceEvent[]) => void }) {
-  const [query, setQuery] = useState(line.item.name);
+  const initialQuery = line.item.listing?.currency && line.item.listing.currency !== 'USD' ? 'heavy duty steel shelving rack' : line.item.name;
+  const [query, setQuery] = useState(initialQuery);
   const [listings, setListings] = useState<ShopListing[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

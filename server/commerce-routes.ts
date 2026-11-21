@@ -50,7 +50,10 @@ export function commerceRoutes(services: Services = { search: searchListings, pr
     const origin = req.get('origin');
     if (origin) {
       let sameOrigin = false;
-      try { sameOrigin = new URL(origin).host === req.get('host'); } catch { /* reject malformed origins */ }
+      try {
+        const u = new URL(origin);
+        sameOrigin = u.host === req.get('host') || ((u.hostname === 'localhost' || u.hostname === '127.0.0.1') && (req.hostname === 'localhost' || req.hostname === '127.0.0.1'));
+      } catch { /* reject malformed origins */ }
       if (!sameOrigin) return void res.status(403).json({ error: 'Create checkout from this app after reviewing your cart.' });
     }
     try {
