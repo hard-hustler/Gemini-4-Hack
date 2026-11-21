@@ -8,6 +8,7 @@ import { num } from '../store';
 import '../ui/home.css';
 import { Icon } from '../ui/icons';
 import { Scene } from '../ui/Scene';
+import { CommerceCartButton } from '../ui/Commerce';
 import { demoProject } from './Landing';
 
 interface EvalResults {
@@ -217,6 +218,7 @@ export function Home({
           <button className="hn-link" onClick={onDemos}>
             {hasProjects ? 'Projects' : 'Demos'}
           </button>
+          <CommerceCartButton />
           <button className="hn-link" onClick={onCatalog}>
             Catalog
           </button>

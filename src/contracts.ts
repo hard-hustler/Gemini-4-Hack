@@ -84,14 +84,22 @@ export interface ShopListing {
   checkoutUrl?: string;
   image?: string;
   variantId: string;
+  /** Commerce fields stay optional so projects saved before checkout still load. */
+  productId?: string;
+  sellerDomain?: string;
+  variantTitle?: string;
+  /** Unknown availability never grants permission to buy. */
+  available?: boolean | null;
+  /** Exact currency minor units from Shop, used for checkout approval. */
+  priceMinor?: number;
+  options?: { name: string; label: string }[];
+  productOptions?: { name: string; values: { label: string }[] }[];
+  messages?: string[];
   rating?: number;
   /** footprint read from the listing text, when it states one */
   dims?: { w: number; d: number; text: string };
   /** plain-text description, trimmed; used to read specs */
   description?: string;
-  /** exact Shop ids, kept as returned for a later checkout (procurement add-on) */
-  productId?: string;
-  sellerDomain?: string;
 }
 
 /** One step of the process, in order. The model decides this; it never decides coordinates. */

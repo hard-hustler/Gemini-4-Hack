@@ -7,6 +7,7 @@ import { NewProject } from './screens/NewProject';
 import { BriefBackdrop, PlanReview } from './screens/PlanReview';
 import { Workspace } from './screens/Workspace';
 import { loadProjects, saveProjects, type Project } from './store';
+import { CommerceProvider } from './ui/Commerce';
 import { ThumbRenderer } from './ui/thumbs';
 
 type Route = { name: 'landing' } | { name: 'new'; text?: string } | { name: 'catalog' } | { name: 'demos' } | { name: 'plan' | 'sim'; id: string };
@@ -73,9 +74,9 @@ export default function App() {
     );
   }
   return (
-    <>
+    <CommerceProvider>
       <ThumbRenderer />
       {screen}
-    </>
+    </CommerceProvider>
   );
 }

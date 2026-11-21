@@ -15,6 +15,7 @@ import { formatPrice, priceSubtotals } from '../commerce';
 
 const WALL = { N: 'north', S: 'south', E: 'east', W: 'west' } as const;
 
+/** A listing waiting for its size to be checked; `item` is absent when it could not be read automatically. */
 type Pending = { listing: ShopListing; item?: CatalogItem; trace: TraceEvent[] };
 
 function Replace({ line, total, budget, onClose, onPick }: { line: EquipmentLine; total: number; budget?: number; onClose: () => void; onPick: (item: CatalogItem, trace: TraceEvent[]) => void }) {
@@ -92,10 +93,16 @@ function Replace({ line, total, budget, onClose, onPick }: { line: EquipmentLine
         {listings?.length === 0 && <p className="muted">Nothing found for that search.</p>}
         <div>
           {listings?.map((listing) => (
-            <div key={listing.variantId}>
-              <ShopProductCard listing={listing} busy={!!busy} onUse={(chosen) => void use(chosen)} />
-              <SwapCost delta={swapDelta(line, listing)} qty={line.qty} after={budgetStatus(total + swapDelta(line, listing), budget)} />
-            </div>
+            <ShopProductCard
+              key={listing.variantId}
+              listing={listing}
+              busy={!!busy}
+              onUse={(chosen) => void use(chosen)}
+              afterDetails={(selected) => {
+                const delta = swapDelta(line, selected);
+                return <SwapCost delta={delta} qty={line.qty} after={budgetStatus(total + delta, budget)} />;
+              }}
+            />
           ))}
         </div>
     </CommerceDrawer>
@@ -176,6 +183,7 @@ export function PlanReview({
           <div>
             <span className="muted small">{sourcing ? (concept ? 'Designing the equipment' : 'Sourcing real equipment') : 'Equipment'}</span>
             <h1>{project.name}</h1>
+            <p className="lede">{req.summary}</p>
           </div>
           <button className="icon-btn" onClick={onClose} aria-label="Close" title={project.versions.length ? 'Back to the simulation' : 'Close'}>
             <Icon name="x" size={18} />
@@ -239,6 +247,12 @@ export function PlanReview({
           {!sourcing && (
             <div className="pd-grid">
               <div>
+                <div className="section-head">
+                  <div>
+                    <h2>Equipment</h2>
+                    <p className="muted">{stations} stations in process order · {totalText}.</p>
+                  </div>
+                </div>
                 {checked && (
                   <p className={`checkline${doubtful.length ? ' warn' : ''}`}>
                     <Icon name={doubtful.length ? 'warn' : 'check'} />
@@ -303,7 +317,7 @@ export function PlanReview({
                               </span>
                             )}
                           </div>
-                          <span className="equip-price">{money(l.item.price)}</span>
+                          <span className="equip-price">{l.item.listing ? formatPrice(l.item.listing) : `${money(l.item.price)} estimate`}</span>
                           <div className="stepper" role="group" aria-label={`Quantity of ${l.label}`}>
                             <button onClick={() => setLine(i, { qty: Math.max(0, l.qty - 1) })} aria-label="One fewer">
                               <Icon name="minus" size={14} />

@@ -1,4 +1,5 @@
 import type { MachineRecipe } from './machines';
+import type { ShopListing } from './contracts';
 
 // FactorySpec: the single source of truth. Models emit a spec or edit ops, never layout prose.
 // Units: metres, seconds, kW. Origin is the north-west corner; x runs east, y runs south.
@@ -45,6 +46,8 @@ export interface Station {
   image?: string;
   listingUrl?: string;
   checkoutUrl?: string;
+  /** Listing provenance for the shopping cart; never a payment or checkout session. */
+  listing?: ShopListing;
 }
 
 export interface FactorySpec {
@@ -193,6 +196,6 @@ export function applyOps(spec: FactorySpec, ops: EditOp[]): FactorySpec {
 export function leanSpec(spec: FactorySpec): FactorySpec {
   return {
     ...spec,
-    stations: spec.stations.map(({ name: _n, catalogId: _c, height: _h, shape: _s, recipe: _r, modelUrl: _m, image: _i, listingUrl: _l, checkoutUrl: _k, ...s }) => s),
+    stations: spec.stations.map(({ name: _n, catalogId: _c, height: _h, shape: _s, recipe: _r, modelUrl: _m, image: _i, listingUrl: _l, checkoutUrl: _k, listing: _listing, ...s }) => s),
   };
 }

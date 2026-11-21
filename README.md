@@ -15,6 +15,9 @@ npm run dev     # web on :5173, api on :8787
 npm test        # engine unit tests
 ```
 
+For the Shopify cart and checkout demo, see
+[Shopify commerce setup](docs/shopify-commerce.md).
+
 Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
 3D view, drag edits and engines still work; only the model buttons fail.
 

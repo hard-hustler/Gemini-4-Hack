@@ -66,6 +66,7 @@ function stationsFrom(req: Requirements, equipment: EquipmentLine[]): Station[] 
         image: it.listing?.image,
         listingUrl: it.listing?.url,
         checkoutUrl: it.listing?.checkoutUrl,
+        listing: it.listing,
       });
     }
   }

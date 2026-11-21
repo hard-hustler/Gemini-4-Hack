@@ -13,11 +13,12 @@ import { optimise } from './optimize';
 import { layoutProject, planProject } from './harness';
 import { convertListing } from './recipes';
 import { design, inspect, revise, scout, type StepBrief } from './sculpt';
-import { priceEquipment, searchListings } from './shop';
+import { commerceRoutes } from './commerce-routes';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 
 const app = express();
 app.use(express.json({ limit: '30mb' }));
+app.use(commerceRoutes());
 
 function mediaBlock(mimeType: string, data: string): Block {
   const type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : 'document';
@@ -193,17 +194,7 @@ app.post(
   }),
 );
 
-// ---- Catalog seam: Shopify search and listing -> CatalogItem ----
-app.post('/api/catalog/search', async (req, res) => {
-  try {
-    const { query } = req.body as { query: string };
-    if (!query?.trim()) return void res.status(400).json({ error: 'query is required' });
-    res.json({ listings: await searchListings(query.trim()) });
-  } catch (e) {
-    fail(res, e);
-  }
-});
-
+// ---- Catalog seam: Shopify listing -> CatalogItem ----
 app.post(
   '/api/catalog/convert',
   streamed<{ listing: Parameters<typeof convertListing>[0]; step: Parameters<typeof convertListing>[1] }>(({ listing, step }, emit) => {
