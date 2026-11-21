@@ -223,7 +223,8 @@ export function layoutProject(requirements: Requirements, equipment: EquipmentLi
   const trace: TraceEvent[] = [];
   const t0 = Date.now();
   try {
-    const placed = buildLayout(requirements, equipment);
+    // First layout is the tidy flow line. Squeezing out travel is the Improve step's job, on request.
+    const placed = buildLayout(requirements, equipment, { polish: false });
     trace.push({
       stage: 'place',
       actor: 'engine',

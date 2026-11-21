@@ -18,53 +18,65 @@ npm test        # engine unit tests
 Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
 3D view, drag edits and engines still work; only the model buttons fail.
 
-## Status
+## The flow
 
-- [x] **Milestone 1**: fixture spec, engines, 3D floor, drag to move, layers,
-      metrics strip, version timeline with side-by-side compare. No model calls.
-- [x] **Milestone 2**: `gemini-4-hydrogen` reads a sketch photo or PDF into a
-      FactorySpec and turns a spoken or typed instruction into edit ops, each
-      retried against `validate()` (max 3). `gemini-decision-1` (Decisions API)
-      gives a per-element confidence shown on every label.
-- [x] **Milestone 3**: `gemini-4-neon` explains the bottleneck and proposes six
-      candidate op lists; failed ones get one repair round; the Decisions API
-      gates them; survivors are simulated in parallel and ranked. Gated-out
-      candidates are simulated too, so the gate can be audited.
-- [x] **Milestone 4**: Shop MCP `search_catalog` prices real equipment per
-      station type, reads footprints from listing text, applies prices as
-      `setParam` ops, and builds a per-seller cart of checkout links
-      (`server/shop.ts`). Nothing is ordered.
-- [x] **Milestone 5**: `npm run eval` writes `public/eval/results.json`, shown
-      at `/eval/index.html`.
+1. **Landing**: start a project, or open the built-in demo floor (no key needed).
+2. **Brief**: a prompt, a sketch photo, a PDF, or a voice note, in any mix.
+3. **Equipment**: the harness shows the plan it read and the machine it will use
+   for each step. Edit quantities, the floor and demand, or swap any machine for
+   a real Shop listing.
+4. **Simulation**: a valid layout in 3D, simulated over 30 shifts. Drag, type or
+   speak edits, ask for improvements, save and compare versions.
 
-## How it fits together
+## Harness design
 
-`src/spec.ts` defines `FactorySpec` and the six edit ops (`move`, `rotate`,
-`add`, `remove`, `moveDock`, `setParam`). Every change, from a drag or from a
-model, is an op applied to a spec. Only specs that pass `validate()` are ever
-shown, routed or simulated.
+Builders propose; checkers decide. Models never emit coordinates.
+
+| Stage | Who | Output | Checked by |
+| --- | --- | --- | --- |
+| Read + plan | `gemini-4-hydrogen` | `Requirements` (steps, counts, floor, demand, walls) | `checkRequirements()` in code; errors fed back, up to 3 attempts |
+| Equip | catalog lookup | `EquipmentLine[]` | the user, on the Equipment screen |
+| Check | `gemini-decision-1` | per-step "is this in the brief?" and a coverage score | independent of the planner: it sees only the brief |
+| Convert | `gemini-4-hydrogen` + `gemini-decision-1` | Shop listing -> `CatalogItem` with a suitability score | the user |
+| Place | `src/engines/place.ts` | `FactorySpec` | `validate()`: a layout is valid by construction or the placer says why not |
+| Simulate | `src/engines/simulate.ts` | metrics | queue-theory check in the eval |
+| Improve | `gemini-4-neon`, or a Managed Agent running the seeded search in a sandbox | candidate op lists | `validate()`, Decisions gate, then the simulator |
+| Edit | `gemini-4-hydrogen` | edit ops from text or voice | `validate()`, errors fed back |
+
+Every stage appends a `TraceEvent`; the dark tracker in the UI is that trace,
+and clicking it opens the run log.
+
+Why this shape: in the eval below, a model placing stations directly was valid
+60% of the time and gained little over random starts once a search ran. So the
+model now decides what goes on the floor and code decides where.
+
+## Seams for the other workstreams
+
+All shared types are in `src/contracts.ts`.
+
+- **Catalog and 3D look**: replace the data in `src/catalog.ts`. Give any
+  `CatalogItem` a `modelUrl` (GLB) and the scene draws it, scaled to the
+  footprint, instead of the procedural model (`src/ui/Equipment.tsx`).
+- **Shopify search and buying**: `POST /api/catalog/search {query}` returns
+  `ShopListing[]`; `POST /api/catalog/convert {listing, step}` returns a
+  `CatalogItem`. Stations carry `listingUrl` and `checkoutUrl` through to the
+  bill of equipment in the simulation.
+- **Listing -> 3D conversion**: set `modelUrl` on the item returned by
+  `convertListing()` in `server/harness.ts` (marked in the code).
+
+## Engines
 
 | Engine | File | What it does |
 | --- | --- | --- |
 | validate | `src/engines/validate.ts` | overlaps, 1.2 m minimum aisle, docks on walls, forklift reachability, utility run limits; returns specific errors with station ids |
+| place | `src/engines/place.ts` | requirements + equipment -> valid layout: as drawn when there is a sketch, otherwise a centred flow line |
 | route | `src/engines/route.ts` | A* on the floor grid for each leg of the product flow; Manhattan power and water runs |
-| simulate | `src/engines/simulate.ts` | discrete-event line sim, 30 seeds, forklifts as a shared resource; units/hour, bottleneck, utilisation, WIP as low/median/high (p10/p50/p90) |
+| simulate | `src/engines/simulate.ts` | discrete-event line sim, 30 seeds, forklifts as a shared resource; low/median/high are p10/p50/p90 |
+| search | `src/engines/search.ts` | seeded hill climb through validate + simulate |
 | cost | `src/engines/cost.ts` | build cost, cost per unit, kWh per unit, forklift travel per hour |
 | versions | `src/engines/versions.ts` | saved specs with metrics, parent and diff; compare any two |
 
-## Model jobs
-
-| Model | Job | Where |
-| --- | --- | --- |
-| `gemini-4-hydrogen` | sketch / PDF -> spec; voice or text -> edit ops (JSON-schema output) | `server/pipeline.ts` `readPlan`, `editPlan` |
-| `gemini-decision-1` | per-element confidence: is the thing we read really a station / dock? | `server/pipeline.ts` `scoreElements` |
-| `gemini-4-neon` | bottleneck explanation and candidate improvement ops | `server/optimize.ts` |
-| `gemini-decision-1` | cheap gate: score each candidate before simulation | `server/optimize.ts` |
-| Managed Agent (`antigravity-preview-09-2026` on Hydrogen) | clones this repo into a sandbox and runs 8 seeded layout searches in parallel; results are re-validated and re-simulated locally | `server/agent.ts` |
-
-All calls go through `server/gemini.ts` (Interactions API and Decisions API over REST).
-
-## Eval results (run of 2026-11-21)
+## Eval results (run of 2026-11-21, before the placer existed)
 
 | Check | One model call | Harness |
 | --- | --- | --- |
@@ -80,15 +92,14 @@ asked for: validate() checks geometry, not faithfulness to the input.
 
 ## Known rough edges
 
-- Neon takes 40 to 80 s to propose six candidates.
-- On the fixture the Decisions gate cut the candidate that then simulated best,
-  so treat the gate as a cost saver, not a judge.
-
+- The eval's validity check measures the old path where the model emitted
+  coordinates (`readPlan`). It has not been re-run against the placer.
+- A plan can still be valid but unfaithful (wrong station count). The
+  Decisions check on the Equipment screen flags doubtful steps but does not
+  block.
 - In-browser mic capture is untested; the voice path was tested by posting a
-  WAV clip to `/api/edit`.
-
-- drei `<Html>` labels log a React "unmount a root while rendering" console
-  error on re-render. Harmless, but noisy.
-- The sim charges forklift time only for loaded travel; empty return trips are
-  not modelled.
-- Aisle width is checked between facing stations, not against walls.
+  WAV clip to the server.
+- Neon takes 40 to 80 s to propose six candidates.
+- The sim charges forklift time only for loaded travel, and aisle width is not
+  checked against walls.
+- Built-in equipment models are procedural placeholders.

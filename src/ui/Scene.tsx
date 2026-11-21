@@ -1,123 +1,116 @@
-import { Html, Line, OrbitControls } from '@react-three/drei';
+import { Billboard, Line, OrbitControls, Text } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import type { Routes } from '../engines/route';
-import { centre, dockPoint, footprint, snap, type FactorySpec, type Point, type Station } from '../spec';
+import { dockPoint, footprint, snap, type FactorySpec, type Point, type Station } from '../spec';
+import { BONE, Equipment, INK, ORANGE } from './Equipment';
 
 export interface Layers {
   flow: boolean;
-  forklift: boolean;
+  routes: boolean;
   power: boolean;
   water: boolean;
-  docks: boolean;
+  labels: boolean;
 }
 
-interface SceneProps {
+export interface SceneProps {
   spec: FactorySpec;
   routes: Routes | null;
   layers: Layers;
-  /** station ids to paint as invalid (while dragging) */
   badIds?: string[];
   bottleneck?: string;
-  /** per-element confidence from the Decisions API, keyed by station id or dock:N */
-  confidence?: Record<string, { confidence: number; readAs: string }>;
+  selectedId?: string | null;
   interactive?: boolean;
+  /** pixels of the canvas covered by a panel on the right; the floor is centred in what is left */
+  insetRight?: number;
+  animate?: boolean;
+  onSelect?: (id: string | null) => void;
   onDrag?: (id: string, x: number, y: number) => void;
   onDrop?: (id: string) => void;
 }
 
-const TYPE_COLOURS: Record<string, string> = {
-  storage: '#5b7a99',
-  prep: '#3fa7a3',
-  assembly: '#e0a03a',
-  test: '#9a7bd1',
-  pack: '#62b36b',
-};
-const colourFor = (type: string) => TYPE_COLOURS[type] ?? '#8a93a0';
-const heightFor = (type: string) => (type === 'storage' ? 2.2 : 1);
-
 type V3 = [number, number, number];
+const RED = '#d1543f';
 
 function useToWorld(spec: FactorySpec) {
   const { width, depth } = spec.floor;
   return (p: Point, y = 0): V3 => [p.x - width / 2, y, p.y - depth / 2];
 }
 
+function Label({ text, sub, y, tone }: { text: string; sub?: string; y: number; tone?: 'bad' | 'hot' }) {
+  return (
+    <Billboard position={[0, y, 0]}>
+      <Text fontSize={0.3} color={tone ? RED : INK} anchorY="bottom" outlineWidth={0.06} outlineColor="#fffaf1" letterSpacing={0.01} renderOrder={20} material-depthTest={false} material-depthWrite={false}>
+        {text}
+      </Text>
+      {sub && (
+        <Text fontSize={0.2} color={tone ? RED : '#8a8172'} anchorY="top" position={[0, -0.04, 0]} outlineWidth={0.05} outlineColor="#fffaf1" renderOrder={20} material-depthTest={false} material-depthWrite={false}>
+          {sub}
+        </Text>
+      )}
+    </Billboard>
+  );
+}
+
 function Floor({ spec }: { spec: FactorySpec }) {
-  const { width, depth, cellSize } = spec.floor;
+  const { width, depth } = spec.floor;
   const grid = useMemo(() => {
     const pts: number[] = [];
-    for (let x = 0; x <= width + 1e-6; x += cellSize) pts.push(x - width / 2, 0.005, -depth / 2, x - width / 2, 0.005, depth / 2);
-    for (let z = 0; z <= depth + 1e-6; z += cellSize) pts.push(-width / 2, 0.005, z - depth / 2, width / 2, 0.005, z - depth / 2);
+    for (let x = 1; x < width; x += 1) pts.push(x - width / 2, 0.004, -depth / 2, x - width / 2, 0.004, depth / 2);
+    for (let z = 1; z < depth; z += 1) pts.push(-width / 2, 0.004, z - depth / 2, width / 2, 0.004, z - depth / 2);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     return g;
-  }, [width, depth, cellSize]);
-  const wallH = 0.5;
-  const t = 0.12;
+  }, [width, depth]);
   return (
     <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <planeGeometry args={[width, depth]} />
-        <meshStandardMaterial color="#20252c" roughness={0.95} />
+      <mesh position={[0, -0.2, 0]} receiveShadow>
+        <boxGeometry args={[width + 0.5, 0.4, depth + 0.5]} />
+        <meshStandardMaterial color="#fffaf0" roughness={1} />
+      </mesh>
+      <mesh position={[0, -0.47, 0]}>
+        <boxGeometry args={[width + 0.5, 0.14, depth + 0.5]} />
+        <meshStandardMaterial color="#e6d6bd" roughness={1} />
       </mesh>
       <lineSegments geometry={grid}>
-        <lineBasicMaterial color="#39414b" transparent opacity={0.55} />
+        <lineBasicMaterial color="#e9dcc6" />
       </lineSegments>
-      {(
-        [
-          [0, -depth / 2 - t / 2, width + 2 * t, t],
-          [0, depth / 2 + t / 2, width + 2 * t, t],
-          [-width / 2 - t / 2, 0, t, depth],
-          [width / 2 + t / 2, 0, t, depth],
-        ] as const
-      ).map(([x, z, w, d], i) => (
-        <mesh key={i} position={[x, wallH / 2, z]}>
-          <boxGeometry args={[w, wallH, d]} />
-          <meshStandardMaterial color="#4a5461" />
-        </mesh>
-      ))}
-      <Html position={[0, 0.1, -depth / 2 - 1]} center className="compass">
-        N
-      </Html>
     </group>
   );
 }
 
-function StationBox({
+function StationNode({
   spec,
   s,
   bad,
   hot,
-  conf,
+  selected,
+  showLabel,
+  label,
   interactive,
+  onSelect,
   onDrag,
   onDrop,
-  setDragging,
 }: {
   spec: FactorySpec;
   s: Station;
   bad: boolean;
   hot: boolean;
-  conf?: number;
+  selected: boolean;
+  showLabel: boolean;
+  label: string;
   interactive: boolean;
+  onSelect?: SceneProps['onSelect'];
   onDrag?: SceneProps['onDrag'];
   onDrop?: SceneProps['onDrop'];
-  setDragging: (v: boolean) => void;
 }) {
   const toWorld = useToWorld(spec);
   const f = footprint(s);
-  const h = heightFor(s.type);
+  const h = s.height ?? (s.type === 'storage' ? 2.2 : 1);
   const [hover, setHover] = useState(false);
   const controls = useThree((st) => st.controls) as { enabled: boolean } | null;
-  // Orbit controls listen on the same canvas, so switch them off synchronously: waiting
-  // for a React render would let the first pointer moves orbit the camera.
-  const lockCamera = (on: boolean) => {
-    if (controls) controls.enabled = !on;
-    setDragging(on);
-  };
-  const grab = useRef<{ dx: number; dy: number } | null>(null);
+  const grab = useRef<{ dx: number; dy: number; moved: boolean } | null>(null);
   const plane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
   const hit = useMemo(() => new THREE.Vector3(), []);
 
@@ -125,15 +118,15 @@ function StationBox({
     if (!e.ray.intersectPlane(plane, hit)) return null;
     return { x: hit.x + spec.floor.width / 2, y: hit.z + spec.floor.depth / 2 };
   };
-
   const down = (e: ThreeEvent<PointerEvent>) => {
     if (!interactive) return;
     e.stopPropagation();
     const p = floorPoint(e);
     if (!p) return;
-    grab.current = { dx: p.x - s.x, dy: p.y - s.y };
+    grab.current = { dx: p.x - s.x, dy: p.y - s.y, moved: false };
     (e.target as Element).setPointerCapture(e.pointerId);
-    lockCamera(true);
+    // orbit controls share the canvas: switch them off now, not on the next render
+    if (controls) controls.enabled = false;
   };
   const move = (e: ThreeEvent<PointerEvent>) => {
     if (!grab.current) return;
@@ -143,48 +136,48 @@ function StationBox({
     const cell = spec.floor.cellSize;
     const x = snap(p.x - grab.current.dx, cell);
     const y = snap(p.y - grab.current.dy, cell);
-    if (x !== s.x || y !== s.y) onDrag?.(s.id, x, y);
+    if (x !== s.x || y !== s.y) {
+      grab.current.moved = true;
+      onDrag?.(s.id, x, y);
+    }
   };
   const up = (e: ThreeEvent<PointerEvent>) => {
     if (!grab.current) return;
     e.stopPropagation();
+    const moved = grab.current.moved;
     grab.current = null;
     (e.target as Element).releasePointerCapture(e.pointerId);
-    lockCamera(false);
-    onDrop?.(s.id);
+    if (controls) controls.enabled = true;
+    if (moved) onDrop?.(s.id);
+    else onSelect?.(s.id);
   };
 
-  const pos = toWorld({ x: f.x + f.w / 2, y: f.y + f.d / 2 }, h / 2);
-  const colour = bad ? '#d9483b' : colourFor(s.type);
+  const rotated = s.rot === 90 || s.rot === 270;
+  const ring = bad ? RED : selected ? ORANGE : hot ? RED : hover ? '#cbb89a' : null;
   return (
-    <group position={pos}>
-      <mesh
-        castShadow
-        onPointerDown={down}
-        onPointerMove={move}
-        onPointerUp={up}
-        onPointerOver={() => interactive && setHover(true)}
-        onPointerOut={() => setHover(false)}
-      >
-        <boxGeometry args={[f.w, h, f.d]} />
-        <meshStandardMaterial color={colour} roughness={0.6} emissive={hover || hot ? colour : '#000000'} emissiveIntensity={hover ? 0.35 : hot ? 0.25 : 0} />
-      </mesh>
-      {hot && !bad && (
-        <mesh position={[0, -h / 2 + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+    <group position={toWorld({ x: f.x + f.w / 2, y: f.y + f.d / 2 }, 0)}>
+      {ring && (
+        <mesh position={[0, 0.012, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <planeGeometry args={[f.w + 0.5, f.d + 0.5]} />
-          <meshBasicMaterial color="#ff6b4a" transparent opacity={0.35} />
+          <meshBasicMaterial color={ring} transparent opacity={bad ? 0.4 : selected ? 0.3 : hot ? 0.22 : 0.3} />
         </mesh>
       )}
-      <Html position={[0, h / 2 + 0.35, 0]} center className={`label${bad ? ' bad' : ''}${hot ? ' hot' : ''}`} zIndexRange={[10, 0]} pointerEvents="none" style={{ pointerEvents: 'none' }}>
-        <b>{s.id}</b>
-        <span>{s.type}</span>
-        {conf !== undefined && <em className={conf < 0.7 ? 'low' : ''}>{Math.round(conf * 100)}% sure</em>}
-      </Html>
+      <group rotation={[0, rotated ? Math.PI / 2 : 0, 0]}>
+        <Equipment type={s.type} shape={s.shape} w={rotated ? f.d : f.w} d={rotated ? f.w : f.d} h={h} modelUrl={s.modelUrl} />
+      </group>
+      {/* invisible grab box */}
+      <mesh position={[0, h / 2, 0]} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerOver={() => interactive && setHover(true)} onPointerOut={() => setHover(false)}>
+        <boxGeometry args={[f.w, h + 0.2, f.d]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+      {showLabel && (label || bad) && (
+        <Label text={label || s.id} sub={bad ? 'not valid here' : hot ? 'bottleneck' : undefined} y={h + 0.75} tone={bad ? 'bad' : hot ? 'hot' : undefined} />
+      )}
     </group>
   );
 }
 
-function Docks({ spec, confidence }: { spec: FactorySpec; confidence?: SceneProps['confidence'] }) {
+function Docks({ spec, showLabel }: { spec: FactorySpec; showLabel: boolean }) {
   const toWorld = useToWorld(spec);
   return (
     <>
@@ -192,18 +185,20 @@ function Docks({ spec, confidence }: { spec: FactorySpec; confidence?: SceneProp
         const p = dockPoint(spec, d);
         const alongX = d.wall === 'N' || d.wall === 'S';
         const kind = d.kind ?? (i === 0 ? 'in' : 'out');
+        const out = { N: [0, -0.4], S: [0, 0.4], W: [-0.4, 0], E: [0.4, 0] }[d.wall];
         return (
-          <group key={i} position={toWorld(p, 0.75)}>
-            <mesh>
-              <boxGeometry args={alongX ? [2, 1.5, 0.3] : [0.3, 1.5, 2]} />
-              <meshStandardMaterial color={kind === 'in' ? '#4aa3ff' : '#ff9d4a'} emissive={kind === 'in' ? '#4aa3ff' : '#ff9d4a'} emissiveIntensity={0.3} />
+          <group key={i} position={toWorld(p, 0)}>
+            <mesh position={[out[0] * 0.3, 0.02, out[1] * 0.3]} rotation={[-Math.PI / 2, 0, 0]}>
+              <planeGeometry args={alongX ? [2.4, 0.9] : [0.9, 2.4]} />
+              <meshBasicMaterial color={kind === 'in' ? INK : ORANGE} />
             </mesh>
-            <Html position={[0, 1.2, 0]} center className="label dock" zIndexRange={[10, 0]} pointerEvents="none" style={{ pointerEvents: 'none' }}>
-              <b>dock {kind}</b>
-              {confidence?.[`dock:${i}`] && (
-                <em className={confidence[`dock:${i}`].confidence < 0.7 ? 'low' : ''}>{Math.round(confidence[`dock:${i}`].confidence * 100)}% sure</em>
-              )}
-            </Html>
+            {[-1.2, 1.2].map((o) => (
+              <mesh key={o} position={[alongX ? o : out[0] * 0.5, 0.7, alongX ? out[1] * 0.5 : o]} castShadow>
+                <boxGeometry args={[0.16, 1.4, 0.16]} />
+                <meshStandardMaterial color={kind === 'in' ? INK : ORANGE} roughness={0.8} />
+              </mesh>
+            ))}
+            {showLabel && <Label text={kind === 'in' ? 'Receiving' : 'Shipping'} y={1.7} />}
           </group>
         );
       })}
@@ -211,154 +206,176 @@ function Docks({ spec, confidence }: { spec: FactorySpec; confidence?: SceneProp
   );
 }
 
-function Forklifts({ spec, routes }: { spec: FactorySpec; routes: Routes }) {
-  const toWorld = useToWorld(spec);
-  // One tour through the first path of each leg, as a polyline with cumulative lengths.
-  const tour = useMemo(() => {
+/** One label per step, on its first station: "Assembly ×3", or "Test" when there is one. */
+function labelFor(spec: FactorySpec, s: Station): string {
+  const same = spec.stations.filter((x) => x.type === s.type);
+  if (same[0] !== s) return '';
+  const title = s.type.charAt(0).toUpperCase() + s.type.slice(1);
+  return same.length > 1 ? `${title} ×${same.length}` : title;
+}
+
+interface Tour {
+  pts: THREE.Vector3[];
+  cum: number[];
+  total: number;
+}
+
+/** One continuous path through the first route of every leg: dock in -> each step -> dock out. */
+function useTour(spec: FactorySpec, routes: Routes | null): Tour {
+  const { width, depth } = spec.floor;
+  return useMemo(() => {
     const pts: THREE.Vector3[] = [];
-    const legs = [...new Set(routes.forklift.map((p) => p.leg))].sort((a, b) => a - b);
-    for (const leg of legs) {
-      const path = routes.forklift.find((p) => p.leg === leg)!;
-      for (const p of path.points) pts.push(new THREE.Vector3(...toWorld(p, 0)));
+    if (routes) {
+      const legs = [...new Set(routes.forklift.map((p) => p.leg))].sort((a, b) => a - b);
+      for (const leg of legs) for (const p of routes.forklift.find((x) => x.leg === leg)!.points) pts.push(new THREE.Vector3(p.x - width / 2, 0, p.y - depth / 2));
     }
     const cum = [0];
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]));
     return { pts, cum, total: cum[cum.length - 1] ?? 0 };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routes, spec.floor.width, spec.floor.depth]);
-  const refs = useRef<(THREE.Group | null)[]>([]);
-  const count = Math.max(1, spec.forklifts ?? 1);
+  }, [routes, width, depth]);
+}
 
+function Movers({ tour, carriers, hot }: { tour: Tour; carriers: number; hot: boolean }) {
+  const refs = useRef<(THREE.Group | null)[]>([]);
+  const dots = 9;
+  const n = carriers + dots;
+  const place = (dist: number, g: THREE.Group) => {
+    let i = 1;
+    while (i < tour.cum.length - 1 && tour.cum[i] < dist) i++;
+    const a = tour.pts[i - 1];
+    const b = tour.pts[i];
+    const seg = tour.cum[i] - tour.cum[i - 1];
+    g.position.lerpVectors(a, b, seg > 0 ? (dist - tour.cum[i - 1]) / seg : 0);
+    if (seg > 1e-6) g.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
+  };
   useFrame(({ clock }) => {
     if (tour.total <= 0) return;
-    for (let k = 0; k < count; k++) {
+    for (let k = 0; k < n; k++) {
       const g = refs.current[k];
       if (!g) continue;
-      const dist = (clock.elapsedTime * 3 + (k * tour.total) / count) % tour.total;
-      let i = 1;
-      while (i < tour.cum.length - 1 && tour.cum[i] < dist) i++;
-      const a = tour.pts[i - 1];
-      const b = tour.pts[i];
-      const seg = tour.cum[i] - tour.cum[i - 1];
-      const t = seg > 0 ? (dist - tour.cum[i - 1]) / seg : 0;
-      g.position.lerpVectors(a, b, t);
-      if (seg > 1e-6) g.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
+      const isCarrier = k < carriers;
+      const phase = isCarrier ? (k * tour.total) / carriers : ((k - carriers) * tour.total) / dots;
+      place((clock.elapsedTime * (isCarrier ? 2.6 : 1.5) + phase) % tour.total, g);
     }
   });
-
+  const palette = [ORANGE, '#4d9d74', '#e9b949', RED];
   return (
     <>
-      {Array.from({ length: count }, (_, k) => (
+      {Array.from({ length: n }, (_, k) => (
         <group key={k} ref={(el) => void (refs.current[k] = el)}>
-          <mesh position={[0, 0.35, 0]} castShadow>
-            <boxGeometry args={[0.6, 0.5, 0.9]} />
-            <meshStandardMaterial color="#f2c230" />
-          </mesh>
-          <mesh position={[0, 0.7, 0.4]}>
-            <boxGeometry args={[0.5, 1.2, 0.08]} />
-            <meshStandardMaterial color="#2b2f36" />
-          </mesh>
-          <mesh position={[0, 0.2, 0.75]}>
-            <boxGeometry args={[0.5, 0.25, 0.5]} />
-            <meshStandardMaterial color="#b98b5a" />
-          </mesh>
+          {k < carriers ? (
+            <>
+              <mesh position={[0, 0.3, 0]} castShadow>
+                <boxGeometry args={[0.62, 0.42, 0.95]} />
+                <meshStandardMaterial color={hot ? RED : INK} roughness={0.8} />
+              </mesh>
+              <mesh position={[0, 0.72, -0.12]} castShadow>
+                <boxGeometry args={[0.5, 0.42, 0.5]} />
+                <meshStandardMaterial color={BONE} roughness={0.8} />
+              </mesh>
+              <mesh position={[0, 0.16, 0.62]} castShadow>
+                <boxGeometry args={[0.5, 0.06, 0.5]} />
+                <meshStandardMaterial color={ORANGE} roughness={0.8} />
+              </mesh>
+            </>
+          ) : (
+            <mesh position={[0, 0.13, 0]} castShadow>
+              <boxGeometry args={[0.2, 0.2, 0.2]} />
+              <meshStandardMaterial color={palette[k % palette.length]} roughness={0.8} />
+            </mesh>
+          )}
         </group>
       ))}
     </>
   );
 }
 
-function Flow({ spec }: { spec: FactorySpec }) {
-  const toWorld = useToWorld(spec);
-  const segments = useMemo(() => {
-    const out: { a: V3; b: V3 }[] = [];
-    for (let i = 0; i < spec.routing.length - 1; i++) {
-      const from = spec.stations.filter((s) => s.type === spec.routing[i]);
-      const to = spec.stations.filter((s) => s.type === spec.routing[i + 1]);
-      for (const a of from) for (const b of to) out.push({ a: toWorld(centre(a), heightFor(a.type) + 0.9), b: toWorld(centre(b), heightFor(b.type) + 0.9) });
+function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number }) {
+  const { camera, size, controls } = useThree();
+  const { width, depth } = spec.floor;
+  useEffect(() => {
+    const free = Math.max(320, size.width - insetRight);
+    const span = (width + depth) * 0.86;
+    const zoom = Math.min(free / span, size.height / (span * 0.95));
+    // on screen, "right" is world (1, 0, -1) / sqrt(2) for this camera; shift the target so the floor sits in the free area
+    const shift = insetRight / 2 / zoom / Math.SQRT2;
+    const target = new THREE.Vector3(shift, 0, -shift);
+    camera.position.set(target.x + 40, 50, target.z + 40);
+    (camera as THREE.OrthographicCamera).zoom = zoom;
+    camera.lookAt(target);
+    camera.updateProjectionMatrix();
+    const c = controls as unknown as { target: THREE.Vector3; update: () => void } | null;
+    if (c) {
+      c.target.copy(target);
+      c.update();
     }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec]);
-  return (
-    <>
-      {segments.map(({ a, b }, i) => {
-        const va = new THREE.Vector3(...a);
-        const vb = new THREE.Vector3(...b);
-        const mid = va.clone().lerp(vb, 0.55);
-        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), vb.clone().sub(va).normalize());
-        return (
-          <group key={i}>
-            <Line points={[a, b]} color="#f4f1e8" lineWidth={2} dashed dashSize={0.4} gapSize={0.25} />
-            <mesh position={mid} quaternion={q}>
-              <coneGeometry args={[0.18, 0.5, 12]} />
-              <meshBasicMaterial color="#f4f1e8" />
-            </mesh>
-          </group>
-        );
-      })}
-    </>
-  );
+  }, [camera, controls, size.width, size.height, width, depth, insetRight]);
+  return null;
 }
 
-function World({ spec, routes, layers, badIds = [], bottleneck, confidence, interactive = true, onDrag, onDrop }: SceneProps) {
+function World({ spec, routes, layers, badIds = [], bottleneck, selectedId, interactive = true, insetRight = 0, animate = true, onSelect, onDrag, onDrop }: SceneProps) {
   const toWorld = useToWorld(spec);
-  const [dragging, setDragging] = useState(false);
+  const tour = useTour(spec, routes);
   const span = Math.max(spec.floor.width, spec.floor.depth);
   return (
     <>
-      <ambientLight intensity={0.75} />
-      <directionalLight position={[span * 0.5, span, span * 0.3]} intensity={1.6} castShadow shadow-mapSize={[1024, 1024]}>
-        <orthographicCamera attach="shadow-camera" args={[-span, span, span, -span, 0.1, span * 4]} />
+      <ambientLight intensity={1.5} />
+      <directionalLight position={[-span * 0.4, span * 1.2, span * 0.5]} intensity={1.7} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0005}>
+        <orthographicCamera attach="shadow-camera" args={[-span, span, span, -span, 0.1, span * 5]} />
       </directionalLight>
       <Floor spec={spec} />
+      <mesh position={[0, -0.01, 0]} rotation={[-Math.PI / 2, 0, 0]} onPointerDown={() => onSelect?.(null)}>
+        <planeGeometry args={[spec.floor.width, spec.floor.depth]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
       {spec.stations.map((s) => (
-        <StationBox
+        <StationNode
           key={s.id}
           spec={spec}
           s={s}
           bad={badIds.includes(s.id)}
           hot={bottleneck === s.type}
-          conf={confidence?.[s.id]?.confidence}
+          selected={selectedId === s.id}
+          showLabel={layers.labels}
+          label={labelFor(spec, s)}
           interactive={interactive}
+          onSelect={onSelect}
           onDrag={onDrag}
           onDrop={onDrop}
-          setDragging={setDragging}
         />
       ))}
-      {layers.docks && <Docks spec={spec} confidence={confidence} />}
-      {layers.forklift &&
-        routes?.forklift.map((p, i) => (
-          <Line key={`f${i}`} points={p.points.map((q) => toWorld(q, 0.04))} color="#f2c230" lineWidth={2.5} transparent opacity={0.85} />
-        ))}
-      {layers.forklift && routes && routes.forklift.length > 0 && !dragging && <Forklifts spec={spec} routes={routes} />}
-      {layers.power &&
-        routes?.power.map((r) => <Line key={`p${r.id}`} points={r.points.map((q) => toWorld(q, 0.09))} color="#ff5d5d" lineWidth={1.5} />)}
-      {layers.water &&
-        routes?.water.map((r) => <Line key={`w${r.id}`} points={r.points.map((q) => toWorld(q, 0.13))} color="#39b6ff" lineWidth={1.5} />)}
+      <Docks spec={spec} showLabel={layers.labels} />
+      {layers.routes && routes?.forklift.map((p, i) => <Line key={`r${i}`} points={p.points.map((q) => toWorld(q, 0.02))} color="#d8c7a8" lineWidth={2} />)}
+      {layers.flow && tour.pts.length > 1 && <Line points={tour.pts.map((p) => [p.x, 0.03, p.z] as V3)} color={ORANGE} lineWidth={3.5} />}
+      {layers.flow && animate && tour.total > 0 && <Movers tour={tour} carriers={Math.max(1, spec.forklifts ?? 1)} hot={bottleneck === 'forklift'} />}
+      {layers.power && routes?.power.map((r) => <Line key={`p${r.id}`} points={r.points.map((q) => toWorld(q, 0.05))} color={RED} lineWidth={1.5} dashed dashSize={0.3} gapSize={0.2} />)}
+      {layers.water && routes?.water.map((r) => <Line key={`w${r.id}`} points={r.points.map((q) => toWorld(q, 0.07))} color="#5b8fd6" lineWidth={1.5} dashed dashSize={0.3} gapSize={0.2} />)}
       {layers.power && (
-        <mesh position={toWorld(spec.utilityEntry.power, 0.4)}>
-          <boxGeometry args={[0.5, 0.8, 0.5]} />
-          <meshStandardMaterial color="#ff5d5d" emissive="#ff5d5d" emissiveIntensity={0.4} />
+        <mesh position={toWorld(spec.utilityEntry.power, 0.3)} castShadow>
+          <boxGeometry args={[0.4, 0.6, 0.4]} />
+          <meshStandardMaterial color={RED} roughness={0.8} />
         </mesh>
       )}
       {layers.water && (
-        <mesh position={toWorld(spec.utilityEntry.water, 0.4)}>
-          <cylinderGeometry args={[0.28, 0.28, 0.8, 16]} />
-          <meshStandardMaterial color="#39b6ff" emissive="#39b6ff" emissiveIntensity={0.4} />
+        <mesh position={toWorld(spec.utilityEntry.water, 0.3)} castShadow>
+          <cylinderGeometry args={[0.22, 0.22, 0.6, 16]} />
+          <meshStandardMaterial color="#5b8fd6" roughness={0.8} />
         </mesh>
       )}
-      {layers.flow && <Flow spec={spec} />}
-      <OrbitControls makeDefault maxPolarAngle={Math.PI / 2.1} minDistance={5} maxDistance={span * 3} />
+      <OrbitControls makeDefault enableRotate={interactive} enablePan={interactive} enableZoom={interactive} maxPolarAngle={Math.PI / 2.15} minZoom={8} maxZoom={160} />
+      <FitCamera spec={spec} insetRight={insetRight} />
     </>
   );
 }
 
 export function Scene(props: SceneProps) {
-  const span = Math.max(props.spec.floor.width, props.spec.floor.depth);
+  // r3f sizes the canvas from a measured container; nudge a re-measure once layout has settled
+  useEffect(() => {
+    const t = setTimeout(() => window.dispatchEvent(new Event('resize')), 80);
+    return () => clearTimeout(t);
+  }, []);
   return (
-    <Canvas shadows camera={{ position: [span * 0.1, span * 1.0, span * 0.95], fov: 42 }} dpr={[1, 2]}>
-      <color attach="background" args={['#14171c']} />
+    <Canvas shadows orthographic camera={{ position: [40, 50, 40], zoom: 30, near: -200, far: 600 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
       <World {...props} />
     </Canvas>
   );

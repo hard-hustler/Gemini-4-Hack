@@ -121,23 +121,26 @@ function serpentine(stations: Station[], width: number, depth: number, margin: n
     x += s.w + gap;
   }
   const perRow = Math.ceil(stations.length / rows);
+  const groups: Station[][] = [];
+  for (let r = 0; r * perRow < stations.length; r++) groups.push(stations.slice(r * perRow, (r + 1) * perRow));
+  const rowW = (row: Station[]) => row.reduce((t, s) => t + s.w, 0) + gap * (row.length - 1);
+  const rowD = (row: Station[]) => Math.max(...row.map((s) => s.d));
+  if (groups.some((g) => rowW(g) > usable + EPS)) return null;
+  const blockD = groups.reduce((t, g) => t + rowD(g), 0) + aisle * (groups.length - 1);
+  if (blockD > depth - 2 * margin + EPS) return null;
+  // centre the block on the floor so the rows read as one line with clear aisles all round
+  let y = snap((depth - blockD) / 2, CELL);
   const out: Point[] = [];
-  let y = margin;
-  for (let r = 0; r * perRow < stations.length; r++) {
-    const row = stations.slice(r * perRow, (r + 1) * perRow);
-    const rowW = row.reduce((t, s) => t + s.w, 0) + gap * (row.length - 1);
-    if (rowW > usable + EPS) return null;
-    const rowD = Math.max(...row.map((s) => s.d));
-    if (y + rowD > depth - margin + EPS) return null;
-    let cx = margin;
+  groups.forEach((row, r) => {
+    let cx = snap((width - rowW(row)) / 2, CELL);
     const xs = row.map((s) => {
       const at = cx;
       cx += s.w + gap;
       return at;
     });
     row.forEach((s, i) => out.push({ x: r % 2 === 0 ? xs[i] : width - xs[i] - s.w, y }));
-    y += rowD + aisle;
-  }
+    y += rowD(row) + aisle;
+  });
   return out;
 }
 
