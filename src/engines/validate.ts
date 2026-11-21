@@ -22,7 +22,7 @@ export const MIN_AISLE_M = 1.2;
 export const MAX_UTILITY_RUN_M = 60;
 const EPS = 1e-6;
 
-function gapBetween(a: Rect, b: Rect): { gap: number; facing: boolean; overlap: boolean } {
+export function gapBetween(a: Rect, b: Rect): { gap: number; facing: boolean; overlap: boolean } {
   const dx = Math.max(b.x - (a.x + a.w), a.x - (b.x + b.w));
   const dy = Math.max(b.y - (a.y + a.d), a.y - (b.y + b.d));
   if (dx < -EPS && dy < -EPS) return { gap: 0, facing: true, overlap: true };

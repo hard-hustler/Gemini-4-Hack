@@ -31,6 +31,15 @@ export interface Station {
   powerKw: number;
   needsWater: boolean;
   price: number;
+  /** display and catalog fields: ignored by the engines */
+  name?: string;
+  catalogId?: string;
+  height?: number;
+  shape?: 'bench' | 'rack' | 'machine' | 'table' | 'conveyor';
+  modelUrl?: string;
+  image?: string;
+  listingUrl?: string;
+  checkoutUrl?: string;
 }
 
 export interface FactorySpec {

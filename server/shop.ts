@@ -32,9 +32,10 @@ export interface ShopOption {
   checkoutUrl?: string;
   image?: string;
   variantId: string;
+  description?: string;
 }
 
-async function searchCatalog(query: string, limit: number): Promise<any[]> {
+export async function searchCatalog(query: string, limit: number): Promise<any[]> {
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: {
@@ -79,7 +80,7 @@ export function readDims(text: string): ShopOption['dims'] {
   return { w: round(Math.max(a, b)), d: round(Math.min(a, b)), text: m[0].trim() };
 }
 
-function toOption(p: any): ShopOption | null {
+export function toOption(p: any): ShopOption | null {
   const v = (p.variants ?? []).find((x: any) => x?.availability?.available) ?? p.variants?.[0];
   if (!v?.price?.amount || !v.url) return null;
   const labels = [...(p.options ?? []).flatMap((o: any) => (o.values ?? []).map((x: any) => x.label)), ...(v.options ?? []).map((o: any) => o.label)].join(' ');
@@ -96,6 +97,7 @@ function toOption(p: any): ShopOption | null {
     checkoutUrl: v.checkout_url,
     image: v.media?.[0]?.url ?? p.media?.[0]?.url,
     variantId: String(v.id),
+    description: plain.replace(/\s+/g, ' ').trim().slice(0, 4000),
   };
 }
 
@@ -120,4 +122,9 @@ export async function priceEquipment(spec: FactorySpec) {
     }),
   );
   return { items: results };
+}
+
+/** Free-text search for the plan review screen. Returns listings in the shared ShopListing shape. */
+export async function searchListings(query: string, limit = 12): Promise<ShopOption[]> {
+  return (await searchCatalog(query, limit)).map(toOption).filter((o): o is ShopOption => !!o && o.price >= 20);
 }

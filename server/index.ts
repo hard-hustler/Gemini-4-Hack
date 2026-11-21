@@ -4,7 +4,8 @@ import type { FactorySpec } from '../src/spec';
 import { GeminiError, MODELS, type Block } from './gemini';
 import { deepSearch } from './agent';
 import { optimise } from './optimize';
-import { priceEquipment } from './shop';
+import { convertListing, layoutProject, planProject } from './harness';
+import { priceEquipment, searchListings } from './shop';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 
 const app = express();
@@ -17,6 +18,10 @@ function mediaBlock(mimeType: string, data: string): Block {
 }
 
 function fail(res: Response, e: unknown) {
+  const extra = e as { lines?: string[]; trace?: unknown[] };
+  if (!(e instanceof PipelineError) && !(e instanceof GeminiError) && (extra?.lines || extra?.trace)) {
+    return void res.status(422).json({ error: (e as Error).message, errors: (extra.lines ?? []).map((message) => ({ message })), trace: extra.trace ?? [] });
+  }
   if (e instanceof PipelineError) {
     res.status(422).json({ error: e.message, attempts: e.attempts, errors: e.errors });
   } else if (e instanceof GeminiError) {
@@ -95,6 +100,47 @@ app.post('/api/shop/price', async (req, res) => {
     const { spec } = req.body as { spec: FactorySpec };
     if (!spec) return void res.status(400).json({ error: 'spec is required' });
     res.json(await priceEquipment(spec));
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// ---- Harness: brief -> plan -> (user review) -> layout ----
+app.post('/api/project/plan', async (req, res) => {
+  try {
+    const { text, files } = req.body as { text?: string; files?: { name: string; mimeType: string; data: string }[] };
+    res.json(await planProject(text ?? '', files ?? []));
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+app.post('/api/project/layout', (req, res) => {
+  try {
+    const { requirements, equipment } = req.body;
+    if (!requirements || !equipment) return void res.status(400).json({ error: 'requirements and equipment are required' });
+    res.json(layoutProject(requirements, equipment));
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// ---- Catalog seam: Shopify search and listing -> CatalogItem ----
+app.post('/api/catalog/search', async (req, res) => {
+  try {
+    const { query } = req.body as { query: string };
+    if (!query?.trim()) return void res.status(400).json({ error: 'query is required' });
+    res.json({ listings: await searchListings(query.trim()) });
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+app.post('/api/catalog/convert', async (req, res) => {
+  try {
+    const { listing, step } = req.body;
+    if (!listing || !step) return void res.status(400).json({ error: 'listing and step are required' });
+    res.json(await convertListing(listing, step));
   } catch (e) {
     fail(res, e);
   }

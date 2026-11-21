@@ -122,3 +122,19 @@ describe('localSearch', () => {
     expect(applyOps(workshop, r.ops)).toEqual(r.spec);
   });
 });
+
+describe('buildLayout', () => {
+  it('always returns a valid layout for a plan that fits, and says why when it cannot', async () => {
+    const { buildLayout, PlaceError } = await import('./place');
+    const { pickItem } = await import('../catalog');
+    const step = (type: string, count: number) => ({ type, label: type, count, cycleTimeSec: 0, operators: 1, powerKw: 1, needsWater: false, w: 2, d: 1 });
+    const steps = [step('storage', 1), step('prep', 1), step('assembly', 3), step('test', 2), step('pack', 1), step('laser', 1)];
+    const req = { name: 't', summary: '', floor: { width: 18, depth: 12 }, demandPerHour: 30, steps, dockIn: 'W' as const, dockOut: 'E' as const, powerWall: 'N' as const, waterWall: 'S' as const, sketch: [], assumptions: [] };
+    const equipment = steps.map((s) => ({ stepType: s.type, label: s.label, qty: s.count, item: pickItem(s) }));
+    const r = buildLayout(req, equipment, { polish: false });
+    expect(validate(r.spec)).toEqual([]);
+    expect(r.spec.stations).toHaveLength(9);
+    expect(r.spec.docks.map((d) => d.wall)).toEqual(['W', 'E']);
+    expect(() => buildLayout({ ...req, floor: { width: 6, depth: 5 } }, equipment)).toThrow(PlaceError);
+  });
+});

@@ -43,7 +43,7 @@ export interface SearchResult {
  * Seeded hill climb over station positions, rotations and dock positions.
  * Every candidate goes through validate(); only valid ones are simulated.
  */
-export function localSearch(start: FactorySpec, opts: { iters?: number; seed?: number; simSeeds?: number; moveDocks?: boolean } = {}): SearchResult {
+export function localSearch(start: FactorySpec, opts: { iters?: number; seed?: number; simSeeds?: number; moveDocks?: boolean; lockDockWalls?: boolean } = {}): SearchResult {
   const iters = opts.iters ?? 300;
   const simSeeds = opts.simSeeds ?? 6;
   const rnd = mulberry32(opts.seed ?? 1);
@@ -63,7 +63,7 @@ export function localSearch(start: FactorySpec, opts: { iters?: number; seed?: n
     const roll = rnd();
     if (opts.moveDocks !== false && roll < 0.12 && next.docks.length) {
       const d = pick(next.docks);
-      if (rnd() < 0.4) d.wall = pick<Wall>(['N', 'S', 'E', 'W']);
+      if (!opts.lockDockWalls && rnd() < 0.4) d.wall = pick<Wall>(['N', 'S', 'E', 'W']);
       const len = d.wall === 'N' || d.wall === 'S' ? next.floor.width : next.floor.depth;
       d.offset = snap(1 + rnd() * (len - 2), cell);
     } else {
