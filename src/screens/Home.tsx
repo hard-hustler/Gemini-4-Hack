@@ -1,10 +1,10 @@
-// The landing page, built as a pitch: show the thing, say little. Every picture on it is a
-// render of something the harness itself produced; none are stock or mock-ups.
+// The landing page. It opens on the product itself: a brief being typed and the plant that
+// one sentence produced. Every picture is a render of something the harness built.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DEMOS, type Demo } from '../demos';
 import { runDeterministicAdvocateAudit } from '../engines/advocate';
 import { evaluate } from '../engines/versions';
-import { num, type Project } from '../store';
+import { num } from '../store';
 import '../ui/home.css';
 import { Icon } from '../ui/icons';
 import { Scene } from '../ui/Scene';
@@ -16,7 +16,11 @@ interface EvalResults {
   queue?: { errorPct: number }[];
 }
 
-const BRIEF = 'Plan a car assembly plant that builds 30 compact electric cars an hour, from steel coils to cars driving off the line.';
+const EXAMPLES = [
+  'Plan a car assembly plant that builds 30 compact electric cars an hour, from steel coils to cars driving off the line.',
+  'A workshop that assembles 40 espresso grinders an hour on a 16 by 12 metre floor.',
+  'A cold brew bottling line for 2,000 bottles an hour, with a cold room and two docks.',
+];
 
 const MACHINES: [file: string, name: string, parts: number][] = [
   ['drawing', 'Deep drawing press', 59],
@@ -37,19 +41,21 @@ const MACHINES: [file: string, name: string, parts: number][] = [
   ['visualcheck', 'Inspection tunnel', 79],
 ];
 
-const STEPS: { title: string; line: string }[] = [
-  { title: 'Brief', line: 'A sentence, a sketch photo, a PDF or a voice note.' },
-  { title: 'Research', line: 'Big projects are researched on the web before anything is planned.' },
-  { title: 'Plan', line: 'Departments, steps and station counts, checked against what you asked for.' },
-  { title: 'Build', line: 'One agent per machine. Code checks it holds together; an inspector checks the render.' },
-  { title: 'Simulate', line: 'A layout that passes every rule, run for thirty shifts.' },
-  { title: 'Improve', line: 'Agents propose changes and inspectors walk the floor. Only what wins in simulation is kept.' },
+const QUERIES = ['stamping press line cycle time', 'welding robot cell footprint, kW', 'paint shop oven dwell time', 'EV plant floor area at 30 an hour'];
+const ZONES: [name: string, share: number][] = [
+  ['Stamping', 34],
+  ['Body shop', 62],
+  ['Paint shop', 100],
+  ['General assembly', 78],
+  ['Final inspection', 46],
 ];
+
+const still = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /** Adds .in to anything with .reveal once it scrolls into view. */
 function useReveal() {
   useEffect(() => {
-    const els = [...document.querySelectorAll('.home .reveal')];
+    const els = [...document.querySelectorAll('.home .reveal:not(.in)')];
     if (!('IntersectionObserver' in window)) return void els.forEach((el) => el.classList.add('in'));
     const io = new IntersectionObserver(
       (entries) => {
@@ -60,7 +66,7 @@ function useReveal() {
           }
         }
       },
-      { threshold: 0.18 },
+      { threshold: 0.15 },
     );
     els.forEach((el) => io.observe(el));
     return () => io.disconnect();
@@ -86,7 +92,7 @@ function Count({ to, digits = 0, suffix = '' }: { to: number; digits?: number; s
   const [v, setV] = useState(0);
   useEffect(() => {
     if (!seen) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return void setV(to);
+    if (still()) return void setV(to);
     const t0 = performance.now();
     let raf = 0;
     const tick = (t: number) => {
@@ -105,89 +111,77 @@ function Count({ to, digits = 0, suffix = '' }: { to: number; digits?: number; s
   );
 }
 
-/** Types the brief out once it is on screen. */
-function Typed({ text }: { text: string }) {
-  const [ref, seen] = useInView<HTMLParagraphElement>();
+/** The brief box. Until you type, it types example briefs for you; Plan it carries the text on. */
+function Prompt({ onGo }: { onGo: (text: string) => void }) {
+  const [value, setValue] = useState('');
+  const [focus, setFocus] = useState(false);
+  const [ex, setEx] = useState(0);
   const [n, setN] = useState(0);
   useEffect(() => {
-    if (!seen) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return void setN(text.length);
-    const t = setInterval(() => setN((c) => (c >= text.length ? (clearInterval(t), c) : c + 2)), 28);
-    return () => clearInterval(t);
-  }, [seen, text]);
+    if (value || focus) return;
+    const full = EXAMPLES[ex].length;
+    if (still()) return void setN(full);
+    const t = n < full ? setTimeout(() => setN(n + 2), 26) : setTimeout(() => (setEx((ex + 1) % EXAMPLES.length), setN(0)), 2800);
+    return () => clearTimeout(t);
+  }, [n, ex, value, focus]);
+  const go = () => onGo(value.trim() || EXAMPLES[ex]);
   return (
-    <p ref={ref} className="typed" aria-label={text}>
-      {text.slice(0, n)}
-      <i className={n >= text.length ? 'caret done' : 'caret'} />
-    </p>
+    <form
+      className="ask"
+      onSubmit={(e) => {
+        e.preventDefault();
+        go();
+      }}
+    >
+      <div className="ask-field">
+        <textarea
+          rows={2}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onFocus={() => setFocus(true)}
+          onBlur={() => setFocus(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              go();
+            }
+          }}
+          aria-label="Describe your factory"
+        />
+        {!value && (
+          <span className={`ask-ghost${focus ? ' idle' : ''}`} aria-hidden="true">
+            {focus ? 'Describe your factory' : EXAMPLES[ex].slice(0, n)}
+            {!focus && <i className="caret" />}
+          </span>
+        )}
+      </div>
+      <div className="ask-bar">
+        <span className="ask-hint">
+          <Icon name="clip" size={15} /> Sketch, PDF
+          <Icon name="mic" size={15} /> Voice
+        </span>
+        <button className="btn accent" type="submit">
+          Plan it <Icon name="arrowRight" size={16} />
+        </button>
+      </div>
+    </form>
   );
 }
 
-function StepVisual({ i }: { i: number }) {
-  switch (i) {
-    case 0:
-      return <img className="how-img" src="/sample-sketch.png" alt="A hand-drawn floor sketch" />;
-    case 1:
-      return (
-        <div className="how-search">
-          {['automotive stamping press line cycle time footprint', 'body shop welding robot cell footprint power kW', 'automotive paint shop cycle time footprint', 'EV assembly plant floor area, 30 jobs per hour'].map((q, k) => (
-            <span key={q} style={{ animationDelay: `${k * 0.22}s` }}>
-              <Icon name="arrowRight" size={14} /> {q}
-            </span>
-          ))}
-        </div>
-      );
-    case 2:
-      return (
-        <div className="how-zones">
-          {['Stamping', 'Body shop', 'Paint shop', 'General assembly', 'Final inspection'].map((z, k) => (
-            <span key={z} style={{ animationDelay: `${k * 0.16}s` }}>
-              <em>{String(k + 1).padStart(2, '0')}</em>
-              {z}
-            </span>
-          ))}
-        </div>
-      );
-    case 3:
-      return (
-        <div className="how-grid">
-          {MACHINES.slice(0, 6).map(([f, name], k) => (
-            <img key={f} src={`/img/machine-${f}.png`} alt={name} style={{ animationDelay: `${k * 0.12}s` }} />
-          ))}
-        </div>
-      );
-    case 4:
-      return <img className="how-img pan" src="/img/car-plant-close.jpg" alt="Close view of the paint shop with conveyors" />;
-    default:
-      return <img className="how-img" src="/img/espresso-workshop.jpg" alt="A workshop floor with inspectors walking it" />;
-  }
-}
-
 export function Home({
-  projects,
+  hasProjects,
   onNew,
   onCatalog,
-  onOpen,
   onDemos,
   onOpenDemo,
-  onDelete,
 }: {
-  projects: Project[];
-  onNew: () => void;
+  hasProjects: boolean;
+  onNew: (text?: string) => void;
   onCatalog: () => void;
-  onOpen: (p: Project) => void;
   onDemos: () => void;
   onOpenDemo: (d: Demo) => void;
-  onDelete: (id: string) => void;
 }) {
   useReveal();
-  const [step, setStep] = useState(0);
-  const [held, setHeld] = useState(false);
-  useEffect(() => {
-    if (held || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const t = setInterval(() => setStep((s) => (s + 1) % STEPS.length), 3600);
-    return () => clearInterval(t);
-  }, [held]);
 
   const [results, setResults] = useState<EvalResults | null>(null);
   useEffect(() => {
@@ -214,89 +208,68 @@ export function Home({
 
   return (
     <div className="home">
-      <header className="home-nav">
+      <header className="hn">
         <span className="wordmark">
           dry run<i>.</i>
         </span>
         <nav>
-          <button className="home-link" onClick={onDemos}>
-            Demos
+          <button className="hn-link" onClick={onDemos}>
+            {hasProjects ? 'Projects' : 'Demos'}
           </button>
-          <button className="home-link" onClick={onCatalog}>
+          <button className="hn-link" onClick={onCatalog}>
             Catalog
           </button>
-          <a className="home-link" href="/eval/index.html" target="_blank" rel="noreferrer">
+          <a className="hn-link" href="/eval/index.html" target="_blank" rel="noreferrer">
             Eval
           </a>
-          <button className="btn-ink" onClick={onNew}>
+          <button className="btn ink" onClick={() => onNew()}>
             Start a project
           </button>
         </nav>
       </header>
 
-      <section className="home-hero">
-        <div className="home-hero-copy">
-          <span className="mono tag">
-            <i className="dot" /> Factory planning, simulated
-          </span>
-          <h1>
-            Test the
-            <br />
-            factory before
-            <br />
-            you build it.
-          </h1>
-          <p>Describe a factory. Agents plan it, build every machine and simulate it, before you spend a dollar.</p>
-          <div className="home-cta">
-            <button className="btn-ink lg" onClick={onNew}>
-              Start a project <Icon name="arrowRight" />
-            </button>
-            <button className="btn-line lg" onClick={onDemos}>
-              See the demos
-            </button>
-          </div>
+      <section className="top">
+        <h1 className="rise">
+          Test the factory
+          <br />
+          before you <em>build</em> it.
+        </h1>
+        <p className="top-sub rise r1">One sentence in. A planned, equipped and simulated factory out.</p>
+        <div className="rise r2">
+          <Prompt onGo={onNew} />
         </div>
-        <div className="home-hero-art">
-          <div className="hero-frame">
-            <img src="/img/car-plant-close.jpg" alt="A simulated car plant: paint ovens linked by conveyors" />
-          </div>
-          <figure className="hero-chip a">
+
+        <div className="top-plant rise r3">
+          <button className="plant-img" onClick={() => onOpenDemo(DEMOS[0])} title="Open this plant">
+            <img src="/img/car-plant.jpg" alt="A simulated electric car plant: five departments and sixty stations linked by conveyors" />
+          </button>
+          <figure className="chip c1">
+            <img src="/img/machine-drawing.png" alt="" />
+            <figcaption>
+              <b>Deep drawing press</b>
+              <span>59 parts, 11 moving</span>
+            </figcaption>
+          </figure>
+          <figure className="chip c2">
             <img src="/img/machine-underbody.png" alt="" />
             <figcaption>
               <b>Welding cell</b>
-              <span className="mono">83 parts · agent-built</span>
+              <span>83 parts, built by an agent</span>
             </figcaption>
           </figure>
-          <figure className="hero-chip b">
-            <img src="/img/machine-drawing.png" alt="" />
+          <figure className="chip c3">
+            <img src="/img/machine-spraybooth.png" alt="" />
             <figcaption>
-              <b>Drawing press</b>
-              <span className="mono">59 parts · 11 moving</span>
+              <b>Coat booth</b>
+              <span>Likeness 86%</span>
             </figcaption>
           </figure>
-          <span className="hero-caption mono">Not a mock-up. A plant the harness built from one sentence.</span>
-        </div>
-      </section>
-
-      <section className="home-one">
-        <span className="mono num reveal">One sentence in</span>
-        <h2 className="reveal">A car plant out.</h2>
-        <div className="one-grid">
-          <div className="one-brief reveal">
-            <span className="mono">The whole brief</span>
-            <Typed text={BRIEF} />
-          </div>
-          <div className="one-arrow reveal" aria-hidden="true">
-            <Icon name="arrowRight" size={28} />
-          </div>
-          <button className="one-result reveal" onClick={() => onOpenDemo(DEMOS[0])} title="Open this plant">
-            <img src="/img/car-plant.jpg" alt="The whole plant: five departments and sixty stations" />
-            <span className="mono">
-              Open this plant <Icon name="arrowRight" size={14} />
-            </span>
+          <button className="plant-open" onClick={() => onOpenDemo(DEMOS[0])}>
+            Built from the first sentence above. Open it <Icon name="arrowRight" size={14} />
           </button>
         </div>
-        <div className="one-stats reveal">
+
+        <div className="top-stats reveal">
           <div>
             <Count to={60} />
             <span>stations placed</span>
@@ -311,42 +284,103 @@ export function Home({
           </div>
           <div>
             <Count to={26.6} digits={1} />
-            <span>cars an hour, against 30 asked</span>
+            <span>cars an hour, 30 asked</span>
           </div>
         </div>
       </section>
 
-      <section className="home-how" onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)}>
-        <span className="mono num reveal">How it works</span>
-        <div className="how-rail reveal" role="tablist" aria-label="Steps">
-          {STEPS.map((s, i) => (
-            <button key={s.title} role="tab" aria-selected={step === i} className={step === i ? 'on' : i < step ? 'done' : ''} onClick={() => setStep(i)}>
-              <span className="mono">{String(i + 1).padStart(2, '0')}</span>
-              {s.title}
-              {step === i && !held && <i className="how-timer" />}
-            </button>
-          ))}
-        </div>
-        <div className="how-stage reveal">
-          <div className="how-copy" key={`c${step}`}>
-            <h3>{STEPS[step].title}</h3>
-            <p>{STEPS[step].line}</p>
-          </div>
-          <div className="how-visual" key={`v${step}`}>
-            <StepVisual i={step} />
-          </div>
+      <section className="how">
+        <h2 className="reveal">From a sentence to a running floor.</h2>
+        <div className="bento">
+          <article className="tile t4 reveal">
+            <div className="tile-art sketch">
+              <img src="/sample-sketch.png" alt="A hand-drawn floor sketch" />
+            </div>
+            <div className="tile-text">
+              <h3>
+                <i>1</i> Brief
+              </h3>
+              <p>Text, a sketch photo, a PDF or a voice note.</p>
+            </div>
+          </article>
+          <article className="tile t4 reveal">
+            <div className="tile-art queries">
+              {QUERIES.map((q, k) => (
+                <span key={q} style={{ animationDelay: `${k * 0.9}s` }}>
+                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                    <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                    <path d="M10.5 10.5 14 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                  {q}
+                </span>
+              ))}
+            </div>
+            <div className="tile-text">
+              <h3>
+                <i>2</i> Research
+              </h3>
+              <p>Real cycle times and footprints, looked up first.</p>
+            </div>
+          </article>
+          <article className="tile t4 reveal">
+            <div className="tile-art zones">
+              {ZONES.map(([z, share], k) => (
+                <span key={z}>
+                  {z}
+                  <i>
+                    <b style={{ width: `${share}%`, animationDelay: `${k * 0.14}s` }} />
+                  </i>
+                </span>
+              ))}
+            </div>
+            <div className="tile-text">
+              <h3>
+                <i>3</i> Plan
+              </h3>
+              <p>Departments and station counts, checked against your brief.</p>
+            </div>
+          </article>
+          <article className="tile t7 reveal">
+            <div className="tile-art built">
+              {MACHINES.slice(0, 8).map(([f, name], k) => (
+                <img key={f} src={`/img/machine-${f}.png`} alt={name} loading="lazy" style={{ animationDelay: `${k * 0.35}s` }} />
+              ))}
+            </div>
+            <div className="tile-text">
+              <h3>
+                <i>4</i> Build
+              </h3>
+              <p>One agent per machine. An inspector judges every render.</p>
+            </div>
+          </article>
+          <article className="tile t5 reveal">
+            <div className="tile-art pan">
+              <img src="/img/car-plant-close.jpg" alt="Close view of the paint shop with conveyors" loading="lazy" />
+            </div>
+            <div className="tile-text">
+              <h3>
+                <i>5</i> Simulate
+              </h3>
+              <p>Thirty shifts on a layout that passes every rule.</p>
+            </div>
+          </article>
+          <article className="tile t12 wide reveal">
+            <div className="tile-text">
+              <h3>
+                <i>6</i> Improve
+              </h3>
+              <p>Five inspectors walk the floor and argue with it. Agents propose changes. Only what wins in simulation is kept.</p>
+              {live && <span className="live-tag">Running in this page: {num(live.uph)} units an hour</span>}
+            </div>
+            <div className="tile-art floor" ref={liveRef}>
+              {live && <Scene spec={live.spec} routes={live.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false, crew: true }} walkPlans={live.walkPlans} interactive={false} />}
+            </div>
+          </article>
         </div>
       </section>
 
-      <section className="home-wall">
-        <div className="wall-head">
-          <span className="mono num reveal">The machines</span>
-          <h2 className="reveal">
-            Each one designed,
-            <br />
-            checked and inspected.
-          </h2>
-        </div>
+      <section className="wall">
+        <h2 className="reveal">Every machine designed by an agent.</h2>
         {[MACHINES.slice(0, 8), MACHINES.slice(8)].map((row, r) => (
           <div key={r} className={`marquee${r ? ' back' : ''}`} aria-hidden={r > 0}>
             <div className="marquee-track">
@@ -355,7 +389,7 @@ export function Home({
                   <img src={`/img/machine-${f}.png`} alt={k < row.length ? name : ''} loading="lazy" />
                   <figcaption>
                     <b>{name}</b>
-                    <span className="mono">{parts} parts</span>
+                    <span>{parts} parts</span>
                   </figcaption>
                 </figure>
               ))}
@@ -364,61 +398,45 @@ export function Home({
         ))}
       </section>
 
-      <section className="home-live">
-        <div className="live-copy">
-          <span className="mono num reveal">Running now, in this page</span>
-          <h2 className="reveal">Then it gets argued with.</h2>
-          <p className="reveal">Five inspectors walk the finished floor and challenge it: bottlenecks, safety, cost, compliance, maintenance.</p>
-        </div>
-        <div className="live-view reveal" ref={liveRef}>
-          {live && <Scene spec={live.spec} routes={live.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false, crew: true }} walkPlans={live.walkPlans} interactive={false} />}
-          {live && <span className="mono live-tag">Live · {num(live.uph)} units an hour</span>}
+      <section className="proof">
+        <div className="proof-panel reveal">
+          <h2>
+            The model proposes.
+            <br />
+            The simulator decides.
+          </h2>
+          {results && (
+            <div className="proof-stats">
+              {results.validity && (
+                <div>
+                  <Count to={Math.round(results.validity.placerValidShare * 100)} suffix="%" />
+                  <span>of layouts valid. A single model call manages {Math.round(results.validity.oneCallValidShare * 100)}%.</span>
+                </div>
+              )}
+              {worstHarness !== null && worstOneCall !== null && (
+                <div>
+                  <Count to={worstHarness} digits={1} suffix="%" />
+                  <span>from the best-known answer on public layout benchmarks. One call: {num(worstOneCall)}%.</span>
+                </div>
+              )}
+              {worstQueue !== null && (
+                <div>
+                  <Count to={worstQueue} digits={1} suffix="%" />
+                  <span>largest gap between the simulator and queueing theory.</span>
+                </div>
+              )}
+            </div>
+          )}
+          <a className="proof-link" href="/eval/index.html" target="_blank" rel="noreferrer">
+            Read where it breaks <Icon name="arrowRight" size={14} />
+          </a>
         </div>
       </section>
 
-      <section className="home-proof">
-        <span className="mono num reveal">Why believe it</span>
-        <h2 className="reveal">
-          The model proposes.
-          <br />
-          The simulator decides.
-        </h2>
-        {results && (
-          <div className="home-stats reveal">
-            {results.validity && (
-              <div>
-                <Count to={Math.round(results.validity.placerValidShare * 100)} suffix="%" />
-                <span>
-                  of layouts valid, against {Math.round(results.validity.oneCallValidShare * 100)}% from a single model call
-                </span>
-              </div>
-            )}
-            {worstHarness !== null && worstOneCall !== null && (
-              <div>
-                <Count to={worstHarness} digits={1} suffix="%" />
-                <span>from the best-known answer on public layout benchmarks, against {num(worstOneCall)}% for one call</span>
-              </div>
-            )}
-            {worstQueue !== null && (
-              <div>
-                <Count to={worstQueue} digits={1} suffix="%" />
-                <span>largest gap between the simulator and textbook queueing theory</span>
-              </div>
-            )}
-          </div>
-        )}
-        <a className="btn-line reveal" href="/eval/index.html" target="_blank" rel="noreferrer">
-          Read where it breaks <Icon name="arrowRight" size={14} />
-        </a>
-      </section>
-
-      <section className="home-demos">
-        <div className="demos-head">
-          <div>
-            <span className="mono num reveal">Open one</span>
-            <h2 className="reveal">Built by the harness.</h2>
-          </div>
-          <button className="btn-line reveal" onClick={onDemos}>
+      <section className="open">
+        <div className="open-head">
+          <h2 className="reveal">Open one.</h2>
+          <button className="btn line reveal" onClick={onDemos}>
             All demos <Icon name="arrowRight" size={14} />
           </button>
         </div>
@@ -442,51 +460,25 @@ export function Home({
         </div>
       </section>
 
-      {projects.length > 0 && (
-        <section className="home-projects">
-          <span className="mono num">Your projects</span>
-          <div className="project-list">
-            {projects.map((p) => {
-              const v = p.versions[p.versions.length - 1];
-              return (
-                <div key={p.id} className="project-row">
-                  <button onClick={() => onOpen(p)}>{p.name}</button>
-                  <span>
-                    {p.requirements.floor.width} × {p.requirements.floor.depth} m
-                  </span>
-                  <span>{p.equipment.reduce((t, l) => t + l.qty, 0)} stations</span>
-                  <span>{v ? `v${p.versions.length} · ${num(v.metrics.sim.unitsPerHour.median)} / h` : 'No layout yet'}</span>
-                  <button className="icon-btn" onClick={() => onDelete(p.id)} aria-label={`Delete ${p.name}`} title="Delete project">
-                    <Icon name="trash" />
-                  </button>
-                </div>
-              );
-            })}
+      <section className="close">
+        <div className="close-panel reveal">
+          <h2>Bring one real floor.</h2>
+          <div className="close-cta">
+            <button className="btn white lg" onClick={() => onNew()}>
+              Start a project <Icon name="arrowRight" />
+            </button>
+            <button className="btn clear lg" onClick={onDemos}>
+              See the demos
+            </button>
           </div>
-        </section>
-      )}
-
-      <section className="home-close">
-        <h2 className="reveal">
-          Bring one
-          <br />
-          real floor.
-        </h2>
-        <div className="home-cta reveal">
-          <button className="btn-ink lg" onClick={onNew}>
-            Start a project <Icon name="arrowRight" />
-          </button>
-          <button className="btn-line lg" onClick={onDemos}>
-            See the demos
-          </button>
         </div>
       </section>
 
-      <footer className="home-foot mono">
-        <span>
+      <footer className="hf">
+        <span className="wordmark">
           dry run<i>.</i>
         </span>
-        <span>Gemini 4 Hydrogen · Neon · Decisions API · Managed Agents · Shop</span>
+        <span>Gemini 4 Hydrogen, Neon, Decisions API, Managed Agents, Shop</span>
       </footer>
     </div>
   );

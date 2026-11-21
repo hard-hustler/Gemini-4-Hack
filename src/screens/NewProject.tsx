@@ -22,8 +22,8 @@ const EXAMPLES = [
   },
 ];
 
-export function NewProject({ onHome, onCreated }: { onHome: () => void; onCreated: (p: Project) => void }) {
-  const [text, setText] = useState('');
+export function NewProject({ onHome, onCreated, initialText = '' }: { onHome: () => void; onCreated: (p: Project) => void; /** a brief typed on the landing page */ initialText?: string }) {
+  const [text, setText] = useState(initialText);
   const [files, setFiles] = useState<Attachment[]>([]);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);

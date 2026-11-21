@@ -3,6 +3,7 @@
 // The browser drives the loop because it owns the renderer; every model call goes through the server.
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CatalogItem, EquipmentLine, ShopListing, TraceEvent } from '../contracts';
 import type { MachineModel } from '../model3d';
 import { apiStream, money } from '../store';
@@ -55,16 +56,23 @@ export function Swarm({
   lines,
   concept = false,
   context,
+  actionsHost,
+  visible = true,
   onApply,
   onClose,
 }: {
+  /** where the swarm's buttons go: the footer of the window it lives in */
+  actionsHost?: HTMLElement | null;
+  /** false while the swarm keeps working behind the equipment list */
+  visible?: boolean;
   lines: EquipmentLine[];
   /** plant equipment is not sold on Shop: design it from what each step does instead of scouting */
   concept?: boolean;
   /** what the plant makes, passed to agents designing from the process */
   context?: string;
   onApply: (items: Record<string, CatalogItem>, events: TraceEvent[]) => void;
-  onClose: () => void;
+  /** discard is true once the agents have finished; while they work, closing only hides them */
+  onClose: (discard: boolean) => void;
 }) {
   const active = lines.filter((l) => l.qty > 0);
   const [agents, setAgents] = useState<Agent[]>(() => active.map((l) => ({ key: l.stepType, label: l.label, stage: 'queued', reached: [], renders: [], log: [], round: 0, startedAt: Date.now() })));
@@ -191,17 +199,12 @@ export function Swarm({
   };
 
   return (
-    <div className="swarm" role="dialog" aria-label="Sourcing swarm">
+    <div className="swarm" aria-label="Sourcing swarm">
       <header className="swarm-head">
-        <div>
-          <h2>Sourcing swarm</h2>
-          <p>
-            {agents.length} agents, one per step, {Math.min(POOL, agents.length)} at a time.{' '}
-            {concept
-              ? 'Each designs the equipment its step needs part by part, renders it, and has an inspector judge the render.'
-              : 'Each finds a real listing, models it part by part, renders it, and has an inspector compare the render with the listing photo.'}
-          </p>
-        </div>
+        <p>
+          {agents.length} agents, one per step, {Math.min(POOL, agents.length)} at a time.{' '}
+          {concept ? 'Each designs the equipment its step needs, renders it, and has an inspector judge the render.' : 'Each finds a real listing, models it from the photo, and has an inspector compare the render with that photo.'}
+        </p>
         <div className="swarm-stats">
           <span>
             <b>
@@ -215,14 +218,21 @@ export function Swarm({
           <span>
             <b>{(elapsed / 1000).toFixed(0)} s</b>
           </span>
-          <button className="ghost" onClick={onClose}>
-            {running ? 'Hide' : 'Close'}
-          </button>
-          <button className="primary" disabled={running || !built.length} onClick={apply}>
-            Use {built.length || ''} in the plan <Icon name="arrowRight" />
-          </button>
         </div>
       </header>
+      {actionsHost &&
+        visible &&
+        createPortal(
+          <>
+            <button className="ghost lg" onClick={() => onClose(!running)}>
+              {running ? 'Back to the list' : 'Discard these'}
+            </button>
+            <button className="primary lg" disabled={running || !built.length} onClick={apply}>
+              {running ? `Building ${built.length} of ${agents.length}` : `Use ${built.length} in the plan`} <Icon name="arrowRight" />
+            </button>
+          </>,
+          actionsHost,
+        )}
 
       <div className="swarm-grid">
         {agents.map((a, i) => (
