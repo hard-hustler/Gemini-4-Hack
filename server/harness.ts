@@ -67,7 +67,7 @@ const requirementsSchema = {
     transport: { type: 'string', enum: ['forklift', 'conveyor'], description: 'how units move between steps: forklift in a workshop, conveyor on a production line or plant' },
     sketch: {
       type: 'array',
-      description: 'ONLY if the brief includes a drawing of the floor: one entry per drawn station, its centre as a fraction of floor width (fx, 0 = west) and depth (fy, 0 = north). Otherwise empty.',
+      description: 'ONLY if the brief includes a drawing of the floor: one entry per drawn station, its centre as a fraction of floor width (fx, 0 = west wall, 1 = east wall) and depth (fy, 0 = north wall, 1 = south wall), measured between the drawn walls and not the edges of the photo. Otherwise empty.',
       items: { type: 'object', properties: { type: { type: 'string' }, fx: { type: 'number' }, fy: { type: 'number' } }, required: ['type', 'fx', 'fy'] },
     },
     assumptions: { type: 'array', items: { type: 'string' }, description: 'each thing you had to assume because the brief did not say' },
@@ -82,7 +82,7 @@ Typical cycle times (s): storage 20, kitting 50, prep 80, assembly 200, weld 150
 If the brief gives no floor size, choose one that fits the equipment with room for 1.2 m aisles (roughly five times the total equipment footprint) and say so in assumptions. North is the top of any drawing.
 If the brief does not say where docks or utilities are, pick sensible walls and list each as an assumption. Do not invent steps the brief does not ask for or imply.
 For each step, "label" is the activity ("CNC turning") and "machine" is the equipment a buyer would search a catalog for ("CNC lathe", "parts washer", "coordinate measuring machine"). The machine name is what gets searched on a marketplace, so make it a plain product noun.
-If the brief includes a drawing of the floor, "sketch" has one entry for every box drawn: five boxes of the same machine are five entries with the same type, each at its own position. Read positions off the drawing; do not tidy them.`;
+If the brief includes a drawing of the floor, "sketch" has one entry for every box drawn: five boxes of the same machine are five entries with the same type, each at its own position. Read positions off the drawing; do not tidy them. Measure from the walls as drawn: a box touching the west wall has fx near 0 and one touching the east wall has fx near 1, however much blank paper surrounds the floor in the photo.`;
 
 /** Added to the planner's instructions when the brief is a production line or a whole plant. */
 const largeSystem = (scale: 'line' | 'plant') => `

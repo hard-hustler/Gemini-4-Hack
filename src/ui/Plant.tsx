@@ -155,12 +155,25 @@ export function Zones({ spec, labels }: { spec: FactorySpec; labels: boolean }) 
 }
 
 // ---------- conveyors ----------
-const BED_Y = 0.72;
-const BELT_W = 0.8;
+/**
+ * A belt is sized to the machines it serves: about a quarter of a typical machine's short side,
+ * between a 0.3 m parts conveyor and the 0.8 m line of a plant. Everything else follows from it.
+ */
+function beltSize(spec: FactorySpec) {
+  const sides = spec.stations.map((s) => Math.min(s.w, s.d)).sort((a, b) => a - b);
+  const typical = sides[sides.length >> 1] ?? 2;
+  const w = Math.max(0.3, Math.min(0.8, typical * 0.26));
+  const k = w / 0.8;
+  return { w, k, bedY: Math.max(0.45, 0.72 * Math.sqrt(k)) };
+}
 
 /** Every routed path as a conveyor: bed, side rails, legs, and product riding along it. */
 export function Conveyors({ spec, routes, animate }: { spec: FactorySpec; routes: Routes; animate: boolean }) {
   const { width, depth } = spec.floor;
+  const belt = useMemo(() => beltSize(spec), [spec]);
+  const BELT_W = belt.w;
+  const BED_Y = belt.bedY;
+  const K = belt.k;
   const data = useMemo(() => {
     // Paths share trunks, so the belt is drawn from the set of unit steps any path takes: each
     // stretch once, with collinear steps joined into one long run.
@@ -224,7 +237,7 @@ export function Conveyors({ spec, routes, animate }: { spec: FactorySpec; routes
       for (let o = (i * 5.3) % spacing; o < p.total; o += spacing) items.push({ path: i, offset: o });
     });
     return { segs, paths, legs, items };
-  }, [routes, width, depth, spec.floor.cellSize]);
+  }, [routes, width, depth, spec.floor.cellSize, BED_Y]);
 
   const beds = useRef<THREE.InstancedMesh>(null);
   const belts = useRef<THREE.InstancedMesh>(null);
@@ -245,16 +258,16 @@ export function Conveyors({ spec, routes, animate }: { spec: FactorySpec; routes
     data.segs.forEach((s, i) => {
       // each segment overruns by half a belt width so corners close up
       const L = s.len + BELT_W;
-      place(beds.current, i, s.x, BED_Y - 0.08, s.z, s.alongX ? L : BELT_W, 0.14, s.alongX ? BELT_W : L);
-      place(belts.current, i, s.x, BED_Y, s.z, s.alongX ? L : BELT_W * 0.78, 0.03, s.alongX ? BELT_W * 0.78 : L);
+      place(beds.current, i, s.x, BED_Y - 0.08 * K, s.z, s.alongX ? L : BELT_W, 0.14 * K, s.alongX ? BELT_W : L);
+      place(belts.current, i, s.x, BED_Y, s.z, s.alongX ? L : BELT_W * 0.78, 0.03 * K, s.alongX ? BELT_W * 0.78 : L);
       for (const side of [-1, 1]) {
         const off = (side * BELT_W) / 2;
-        place(rails.current, i * 2 + (side > 0 ? 1 : 0), s.x + (s.alongX ? 0 : off), BED_Y + 0.06, s.z + (s.alongX ? off : 0), s.alongX ? s.len : 0.05, 0.12, s.alongX ? 0.05 : s.len);
+        place(rails.current, i * 2 + (side > 0 ? 1 : 0), s.x + (s.alongX ? 0 : off), BED_Y + 0.06 * K, s.z + (s.alongX ? off : 0), s.alongX ? s.len : 0.05 * K, 0.12 * K, s.alongX ? 0.05 * K : s.len);
       }
     });
-    data.legs.forEach(([x, z], i) => place(legs.current, i, x, (BED_Y - 0.15) / 2, z, 0.1, BED_Y - 0.15, BELT_W * 0.7));
+    data.legs.forEach(([x, z], i) => place(legs.current, i, x, (BED_Y - 0.15 * K) / 2, z, 0.1 * K, BED_Y - 0.15 * K, BELT_W * 0.7));
     for (const m of [beds, belts, rails, legs]) if (m.current) m.current.instanceMatrix.needsUpdate = true;
-  }, [data, dummy]);
+  }, [data, dummy, BELT_W, BED_Y, K]);
 
   useFrame(({ clock }) => {
     const mesh = items.current;
@@ -267,9 +280,9 @@ export function Conveyors({ spec, routes, animate }: { spec: FactorySpec; routes
       while (k < p.cum.length - 1 && p.cum[k] < dist) k++;
       const seg = p.cum[k] - p.cum[k - 1];
       dummy.position.lerpVectors(p.pts[k - 1], p.pts[k], seg > 0 ? (dist - p.cum[k - 1]) / seg : 0);
-      dummy.position.y = BED_Y + 0.2;
+      dummy.position.y = BED_Y + 0.2 * K;
       dummy.rotation.set(0, 0, 0);
-      dummy.scale.set(1, 1, 1);
+      dummy.scale.set(K, K, K);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
     });

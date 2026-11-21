@@ -242,7 +242,7 @@ export function Home({
 
         <div className="top-plant rise r3">
           <button className="plant-img" onClick={() => onOpenDemo(DEMOS[0])} title="Open this plant">
-            <img src="/img/car-plant.jpg" alt="A simulated electric car plant: five departments and sixty stations linked by conveyors" />
+            <img src="/img/car-plant.jpg?v=3" alt="A simulated electric car plant: five departments and sixty stations linked by conveyors" />
           </button>
           <figure className="chip c1">
             <img src="/img/machine-drawing.png" alt="" />
@@ -295,7 +295,7 @@ export function Home({
         <div className="bento">
           <article className="tile t4 reveal">
             <div className="tile-art sketch">
-              <img src="/sample-sketch.png" alt="A hand-drawn floor sketch" />
+              <img src="/img/machine-shop-sketch.jpg?v=2" alt="A hand-drawn floor sketch of a machine shop" />
             </div>
             <div className="tile-text">
               <h3>
@@ -356,7 +356,7 @@ export function Home({
           </article>
           <article className="tile t5 reveal">
             <div className="tile-art pan">
-              <img src="/img/car-plant-close.jpg" alt="Close view of the paint shop with conveyors" loading="lazy" />
+              <img src="/img/car-plant-close.jpg?v=3" alt="Close view of the paint shop with conveyors" loading="lazy" />
             </div>
             <div className="tile-text">
               <h3>

@@ -96,19 +96,23 @@ The machine shop is the mid-size story, and its brief is two things: a
 paragraph and a paper sketch (`public/img/machine-shop-sketch.jpg`). The
 "CNC machine shop" example on the brief screen loads both. From them the
 planner sized the job as a line and read all 27 boxes off the sketch, at the
-positions drawn; the checker found every one of the 11 steps in the brief.
+positions drawn (to within about 0.2 m); the checker found every one of the
+11 steps in the brief.
 Eleven agents then went to Shop and each came back with a real listing (a
 Hitachi Seiki CNC lathe, a Jet CNC vertical mill, a Helmel CMM, a 3-stage
 conveyor parts washer, a fibre laser marker and others), modelled from the
 listing photo. Every listing is linked from the sourcing view and the
-equipment list. Placed as drawn on 45 x 30 m, it simulates at 60.4 parts an
-hour against 60.
+equipment list. Placed as drawn on 36 x 24 m, it simulates at 60.2 parts an
+hour against 60. Belts are sized to the machines they serve: about a quarter
+of a typical machine's short side, so a parts conveyor in a machine shop is
+0.4 m wide and a car line 0.8 m.
 
 Conveyors share belt. Each path prefers stretches already laid in its
 direction and pays for every turn (`trunkPath` in `src/engines/grid.ts`), so a
 floor gets a few straight trunks with short spurs instead of one belt per pair
 of machines. The belt is costed once however many paths ride it: the machine
-shop went from 531 m of belt to 164 m, the car plant from 2,738 m to 1,035 m.
+shop went from 531 m of belt to about 150 m, the car plant from 2,738 m to
+1,035 m.
 
 To add one, open a
 project with `?capture` in the URL and post it to `/api/dev/save` (a dev-only
