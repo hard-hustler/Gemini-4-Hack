@@ -61,7 +61,7 @@ const requirementsSchema = {
 
 const PLAN_SYSTEM = `You are the planner in a factory-planning harness. You read a brief (text, photos of sketches, documents, voice notes) for a small light-manufacturing workshop and emit its requirements as JSON.
 You decide WHAT is needed: the process steps in order, how many stations each step needs, and the process numbers. You never decide coordinates; a deterministic placer does that.
-Sizing: a step needs at least ceil(demandPerHour * cycleTimeSec / 3600 / 0.85) stations to keep up with demand. Use the count the brief gives if it gives one; otherwise size it with that rule.
+Station counts: if the brief gives a count for a step, use exactly that count, even if it looks too low for the demand; the simulator will show the shortfall and that is the point. Only when the brief gives no count, size it as ceil(demandPerHour * cycleTimeSec / 3600 / 0.85).
 Typical cycle times (s): storage 20, kitting 50, prep 80, assembly 200, weld 150, paint 180, test 90, inspect 60, label 30, pack 70. Typical station footprint is 2 to 3 m wide by 1 to 2 m deep.
 If the brief gives no floor size, choose one that fits the equipment with room for 1.2 m aisles (roughly five times the total equipment footprint) and say so in assumptions. North is the top of any drawing.
 If the brief does not say where docks or utilities are, pick sensible walls and list each as an assumption. Do not invent steps the brief does not ask for or imply.`;
@@ -122,8 +122,8 @@ export function checkRequirements(r: Requirements): string[] {
     if (!(s.w >= 0.5 && s.w <= 12 && s.d >= 0.5 && s.d <= 12)) errs.push(`step "${s.type}": footprint ${s.w} x ${s.d} m is not plausible (0.5 to 12 m per side)`);
   }
   const area = r.steps.reduce((t, s) => t + s.count * s.w * s.d, 0);
-  if (r.floor.width > 0 && area > r.floor.width * r.floor.depth * 0.45) {
-    errs.push(`equipment footprint ${area.toFixed(0)} m² is more than 45% of the ${(r.floor.width * r.floor.depth).toFixed(0)} m² floor: enlarge the floor (if the brief did not fix it) or reduce station counts`);
+  if (r.floor.width > 0 && area > r.floor.width * r.floor.depth * 0.6) {
+    errs.push(`equipment footprint ${area.toFixed(0)} m² is more than 60% of the ${(r.floor.width * r.floor.depth).toFixed(0)} m² floor: check the station footprints, and enlarge the floor only if the brief did not fix its size. Do not change station counts the brief gives.`);
   }
   return errs;
 }
@@ -179,41 +179,73 @@ export async function planProject(text: string, files: BriefFile[]): Promise<Pla
     throw Object.assign(new Error(`Could not turn this brief into a usable plan after ${MAX_ATTEMPTS} attempts`), { lines: errs, trace });
   }
 
-  const t0 = Date.now();
-  const equipment: EquipmentLine[] = req.steps.map((s) => ({ stepType: s.type, label: s.label, qty: s.count, item: pickItem(s) }));
-  const generic = equipment.filter((l) => l.item.id.startsWith('generic-')).length;
-  trace.push({ stage: 'equip', actor: 'engine', title: 'Matched equipment from the catalog', detail: `${equipment.length - generic} catalog items${generic ? `, ${generic} generic placeholder${generic > 1 ? 's' : ''}` : ''}`, ms: Date.now() - t0, status: 'ok' });
-
-  // Checker: independent of the planner, sees only the brief. Guards against invented or missed steps.
+  // Bind equipment, then let the checker (which sees only the brief) judge the plan. If it finds a
+  // step count that contradicts the brief, that goes back to the planner once: checker feeds builder.
+  let equipment: EquipmentLine[] = [];
   let coverage: number | undefined;
-  try {
-    const questions: Record<string, Question> = {};
-    equipment.forEach((l, i) => {
-      questions[`s${i}`] = { type: 'noul', instructions: `The input is a brief for a small factory or workshop. Does the brief ask for, show, or clearly imply a "${l.label}" (${l.stepType}) step in the process?` };
-    });
-    questions.coverage = {
-      type: 'score',
-      instructions: `The input is a brief for a small factory or workshop. A planner read it and listed these process steps, in order: ${req.steps.map((s) => `${s.count} x ${s.label}`).join(', ')}. How completely and faithfully does that list cover the process the brief describes?`,
-      criteria: ['misses most of what the brief asks for', 'misses or invents several steps', 'roughly right with one clear gap or extra', 'covers the brief with minor differences', 'covers everything the brief asks for and nothing else'],
-    };
-    const d = await decide(brief, questions);
-    equipment.forEach((l, i) => {
-      const a = d.answers[`s${i}`];
-      if (a?.type === 'noul') l.inBrief = a.noul;
-    });
-    const c = d.answers.coverage;
-    if (c?.type === 'score') coverage = c.score / 4;
-    const doubtful = equipment.filter((l) => (l.inBrief ?? 1) < 0.5);
-    trace.push({
-      stage: 'check',
-      actor: 'decisions',
-      title: 'Checked the plan against the brief',
-      detail: `coverage ${coverage !== undefined ? Math.round(coverage * 100) + '%' : 'n/a'}${doubtful.length ? `; not clearly in the brief: ${doubtful.map((l) => l.label).join(', ')}` : '; every step is in the brief'}`,
-      ms: d.ms,
-      status: 'ok',
-    });
-  } catch (e) {
-    trace.push({ stage: 'check', actor: 'decisions', title: 'Check against the brief failed', detail: (e as Error).message, ms: 0, status: 'fail' });
+  for (let round = 0; round < 2; round++) {
+    const t0 = Date.now();
+    equipment = req.steps.map((s) => ({ stepType: s.type, label: s.label, qty: s.count, item: pickItem(s) }));
+    const generic = equipment.filter((l) => l.item.id.startsWith('generic-')).length;
+    trace.push({ stage: 'equip', actor: 'engine', title: 'Matched equipment from the catalog', detail: `${equipment.length - generic} catalog items${generic ? `, ${generic} generic placeholder${generic > 1 ? 's' : ''}` : ''}`, ms: Date.now() - t0, status: 'ok' });
+
+    const contradicted: string[] = [];
+    try {
+      const questions: Record<string, Question> = {};
+      equipment.forEach((l, i) => {
+        questions[`s${i}`] = { type: 'noul', instructions: `The input is a brief for a small factory or workshop. Does the brief ask for, show, or clearly imply a "${l.label}" (${l.stepType}) step in the process?` };
+        questions[`n${i}`] = {
+          type: 'choice',
+          instructions: `The input is a brief for a small factory or workshop. A planner decided the workshop needs ${l.qty} "${l.label}" (${l.stepType}) station${l.qty > 1 ? 's' : ''}. What does the brief itself say about how many of these there are?`,
+          criteria: {
+            agrees: `the brief states or shows exactly ${l.qty}`,
+            differs: `the brief states or shows a different number than ${l.qty}`,
+            silent: 'the brief does not say how many',
+          },
+        };
+      });
+      questions.coverage = {
+        type: 'score',
+        instructions: `The input is a brief for a small factory or workshop. A planner read it and listed these process steps, in order: ${req.steps.map((s) => `${s.count} x ${s.label}`).join(', ')}. How completely and faithfully does that list cover the process the brief describes?`,
+        criteria: ['misses most of what the brief asks for', 'misses or invents several steps', 'roughly right with one clear gap or extra', 'covers the brief with minor differences', 'covers everything the brief asks for and nothing else'],
+      };
+      const d = await decide(brief, questions);
+      equipment.forEach((l, i) => {
+        const a = d.answers[`s${i}`];
+        if (a?.type === 'noul') l.inBrief = a.noul;
+        const n = d.answers[`n${i}`];
+        if (n?.type === 'choice' && n.choice === 'differs' && n.confidence >= 0.6) contradicted.push(`"${l.label}" (${l.stepType}): you gave ${l.qty}, but the brief gives a different number. Use exactly the number the brief gives.`);
+      });
+      const c = d.answers.coverage;
+      if (c?.type === 'score') coverage = c.score / 4;
+      const doubtful = equipment.filter((l) => (l.inBrief ?? 1) < 0.5);
+      trace.push({
+        stage: 'check',
+        actor: 'decisions',
+        title: contradicted.length ? 'Check found counts that contradict the brief' : 'Checked the plan against the brief',
+        detail: `coverage ${coverage !== undefined ? Math.round(coverage * 100) + '%' : 'n/a'}${contradicted.length ? `; ${contradicted.length} count${contradicted.length > 1 ? 's' : ''} differ from the brief` : ''}${doubtful.length ? `; not clearly in the brief: ${doubtful.map((l) => l.label).join(', ')}` : contradicted.length ? '' : '; every step is in the brief'}`,
+        ms: d.ms,
+        status: contradicted.length ? 'retry' : 'ok',
+      });
+    } catch (e) {
+      trace.push({ stage: 'check', actor: 'decisions', title: 'Check against the brief failed', detail: (e as Error).message, ms: 0, status: 'fail' });
+    }
+    if (!contradicted.length || round === 1) break;
+
+    // one revision, driven by the checker's findings
+    steps.push({ type: 'model_output', content: [{ type: 'text', text: JSON.stringify(req) }] });
+    steps.push({ type: 'user_input', content: [{ type: 'text', text: `An independent check against the brief found these problems. Fix them, change nothing else, and emit the full requirements again.\n${contradicted.map((c) => `- ${c}`).join('\n')}` }] });
+    try {
+      const res = await interact<any>({ model: MODELS.hydrogen, input: steps, system: PLAN_SYSTEM, schema: requirementsSchema, thinking: 'low' });
+      const revised = clean(res.json);
+      const bad = checkRequirements(revised);
+      trace.push({ stage: 'plan', actor: 'hydrogen', title: 'Revised the plan after the check', detail: bad.length ? `revision rejected, keeping the first plan: ${bad.join('; ')}` : revised.steps.map((s) => `${s.count} x ${s.label}`).join(', '), ms: res.ms, status: bad.length ? 'fail' : 'ok' });
+      if (bad.length) break;
+      req = revised;
+    } catch (e) {
+      trace.push({ stage: 'plan', actor: 'hydrogen', title: 'Revision failed, keeping the first plan', detail: (e as Error).message, ms: 0, status: 'fail' });
+      break;
+    }
   }
   return { requirements: req, equipment, coverage, trace };
 }

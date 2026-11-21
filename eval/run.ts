@@ -8,7 +8,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mulberry32, simulateOnce, type LineModel } from '../src/engines/simulate';
 import { interact, MODELS, type Step } from '../server/gemini';
+import { layoutProject, planProject } from '../server/harness';
 import { PipelineError, readPlan } from '../server/pipeline';
+import { validate } from '../src/engines/validate';
+import type { FactorySpec } from '../src/spec';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const only = process.argv[2]; // optional: qap | validity | queue
@@ -143,8 +146,24 @@ async function evalQap(name: string) {
   return out;
 }
 
-// ---------- 2. Validity on unseen plans ----------
-function unseenPlans(count: number) {
+// ---------- 2. Validity and faithfulness on unseen plans ----------
+// Three ways to turn the same brief into a layout:
+//   one call      the model emits coordinates, first answer taken as-is
+//   retry loop    the model emits coordinates, validate() errors fed back up to 3 times (old harness)
+//   plan + placer the model emits requirements only, code places the equipment (what ships)
+// "Faithful" means the layout has exactly the station counts and floor size the brief asked for.
+interface UnseenPlan {
+  id: number;
+  stations: number;
+  width: number;
+  depth: number;
+  counts: Record<string, number>;
+  text: string;
+  /** the brief contradicts itself, so there is no single right station count */
+  ambiguous: boolean;
+}
+
+function unseenPlans(count: number): UnseenPlan[] {
   const rnd = mulberry32(2026);
   const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)];
   const kinds = ['storage', 'prep', 'assembly', 'test', 'pack', 'weld', 'paint', 'inspect', 'label', 'kitting'];
@@ -158,26 +177,76 @@ function unseenPlans(count: number) {
     for (let k = flow.length; k < stations; k++) counts[Math.floor(rnd() * flow.length)]++;
     const walls = ['north', 'south', 'east', 'west'];
     const text = `Plan ${i + 1}. A workshop ${width} m wide (east-west) by ${depth} m deep (north-south). Goods come in through a dock on the ${pick(walls)} wall and leave through a dock on the ${pick(walls)} wall. Process flow: ${flow.join(' then ')}. Equipment: ${flow.map((f, k) => `${counts[k]} ${f} station${counts[k] > 1 ? 's' : ''}`).join(', ')}. Demand is ${20 + Math.floor(rnd() * 25)} units per hour. Power comes in at the ${pick(walls)} wall and water at the ${pick(walls)} wall. ${pick(['Keep the middle of the floor clear for a main aisle.', 'Put storage right beside the inbound dock.', 'Line the stations along the walls.', 'Group stations of the same type side by side.'])}`;
-    return { id: i + 1, stations, floor: `${width}x${depth}`, text };
+    // found after the first run: one hint mentions storage even when the equipment list has none
+    const ambiguous = text.includes('Put storage') && !flow.includes('storage');
+    return { id: i + 1, stations, width, depth, counts: Object.fromEntries(flow.map((f, k) => [f, counts[k]])), text, ambiguous };
   });
+}
+
+function faithful(p: UnseenPlan, spec: FactorySpec): boolean {
+  const got: Record<string, number> = {};
+  for (const s of spec.stations) got[s.type] = (got[s.type] ?? 0) + 1;
+  const sameCounts = Object.keys({ ...got, ...p.counts }).every((k) => got[k] === p.counts[k]);
+  return sameCounts && spec.floor.width === p.width && spec.floor.depth === p.depth;
 }
 
 async function evalValidity(count = 10) {
   const plans = unseenPlans(count);
   const rows = await Promise.all(
     plans.map(async (p) => {
+      const row: any = { id: p.id, stations: p.stations, floor: `${p.width}x${p.depth}`, ambiguous: p.ambiguous, brief: p.text };
+      // model places (one call, then the retry loop)
       try {
         const r = await readPlan({ type: 'text', text: p.text });
-        return { ...p, firstCallValid: r.attempts[0].errors.length === 0, harnessValid: true, attempts: r.attempts.length, firstErrors: r.attempts[0].errors.slice(0, 3), gotStations: r.spec.stations.length };
+        row.oneCallValid = r.attempts[0].errors.length === 0;
+        row.retryValid = true;
+        row.retryAttempts = r.attempts.length;
+        row.retryFirstError = r.attempts[0].errors[0];
+        row.retryStations = r.spec.stations.length;
+        row.retryFaithful = faithful(p, r.spec);
       } catch (e) {
-        if (e instanceof PipelineError) return { ...p, firstCallValid: false, harnessValid: false, attempts: e.attempts.length, firstErrors: e.attempts[0]?.errors.slice(0, 3) ?? [], lastErrors: e.errors.map((x) => x.message).slice(0, 3) };
-        return { ...p, firstCallValid: false, harnessValid: false, attempts: 0, firstErrors: [], apiError: (e as Error).message };
+        row.oneCallValid = false;
+        row.retryValid = false;
+        row.retryFaithful = false;
+        if (e instanceof PipelineError) {
+          row.retryAttempts = e.attempts.length;
+          row.retryFirstError = e.attempts[0]?.errors[0];
+        } else row.retryError = (e as Error).message;
       }
+      // code places (plan + placer)
+      try {
+        const plan = await planProject(p.text, []);
+        row.planAttempts = plan.trace.filter((t) => t.actor === 'hydrogen').length;
+        row.coverage = plan.coverage === undefined ? undefined : +plan.coverage.toFixed(2);
+        const lay = layoutProject(plan.requirements, plan.equipment);
+        row.placerValid = validate(lay.spec).length === 0;
+        row.placerStations = lay.spec.stations.length;
+        row.placerFaithful = faithful(p, lay.spec);
+        if (!row.placerFaithful) row.placerNote = `got ${lay.spec.stations.length} stations on ${lay.spec.floor.width}x${lay.spec.floor.depth}`;
+      } catch (e) {
+        row.placerValid = false;
+        row.placerFaithful = false;
+        row.placerError = [(e as Error).message, ...(((e as any).lines as string[] | undefined) ?? [])].join(' | ').slice(0, 240);
+      }
+      return row;
     }),
   );
-  const share = (k: 'firstCallValid' | 'harnessValid') => +(rows.filter((r) => r[k]).length / rows.length).toFixed(2);
-  const wrongCount = rows.filter((r: any) => r.harnessValid && r.gotStations !== r.stations).length;
-  return { n: rows.length, model: MODELS.hydrogen, oneCallValidShare: share('firstCallValid'), harnessValidShare: share('harnessValid'), validButWrongStationCount: wrongCount, rows };
+  const share = (k: string) => +(rows.filter((r) => r[k]).length / rows.length).toFixed(2);
+  const clear = rows.filter((r) => !r.ambiguous);
+  const clearShare = (k: string) => +(clear.filter((r) => r[k]).length / Math.max(1, clear.length)).toFixed(2);
+  return {
+    n: rows.length,
+    model: MODELS.hydrogen,
+    oneCallValidShare: share('oneCallValid'),
+    retryValidShare: share('retryValid'),
+    placerValidShare: share('placerValid'),
+    retryFaithfulShare: share('retryFaithful'),
+    placerFaithfulShare: share('placerFaithful'),
+    ambiguousBriefs: rows.length - clear.length,
+    retryFaithfulShareClearBriefs: clearShare('retryFaithful'),
+    placerFaithfulShareClearBriefs: clearShare('placerFaithful'),
+    rows,
+  };
 }
 
 // ---------- 3. Simulator sanity ----------
@@ -238,4 +307,4 @@ if (!only || only === 'qap') results.qap = await Promise.all(['nug12', 'nug15', 
 if (!only || only === 'validity') results.validity = await evalValidity();
 mkdirSync(dirname(outFile), { recursive: true });
 writeFileSync(outFile, JSON.stringify(results, null, 2));
-console.log(JSON.stringify({ queue: results.queue, qap: results.qap, validity: results.validity && { ...results.validity, rows: results.validity.rows.map((r: any) => ({ id: r.id, st: r.stations, floor: r.floor, first: r.firstCallValid, harness: r.harnessValid, attempts: r.attempts, err: r.firstErrors?.[0] ?? r.apiError })) } }, null, 1));
+console.log(JSON.stringify({ queue: results.queue, qap: results.qap, validity: results.validity }, null, 1));

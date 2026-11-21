@@ -28,15 +28,16 @@
 <main>
   <h1>Dry Run eval</h1>
   <p id="when"></p>
-  <p>One model call compared with the harness (propose, validate, feed errors back, then deterministic search). Raw data: <a href="results.json">results.json</a>. Re-run with <code>npm run eval</code>.</p>
+  <p>One model call compared with the harness. Raw data: <a href="results.json">results.json</a>. Re-run with <code>npm run eval</code>.</p>
 
   <h2>1. Layout quality: QAPLIB Nugent instances</h2>
   <p>Gap to the best-known value from QAPLIB. "Search only" runs the same local search from a random start, so you can see how much of the harness result comes from the model's starting point and how much from the search.</p>
   <div class="wrap"><table id="qap"></table></div>
 
-  <h2>2. Validity on unseen plans</h2>
-  <p>Ten generated text plans, tighter as the number goes up. "One call" is the first model answer checked by validate(); "harness" allows up to three attempts with the errors fed back.</p>
+  <h2>2. Validity and faithfulness on unseen plans</h2>
+  <p>Ten generated text briefs, tighter as the number goes up, each turned into a layout three ways. <b>One call</b>: the model emits coordinates and its first answer is checked. <b>Retry loop</b>: the same, with validate() errors fed back up to three times. <b>Plan + placer</b> (what ships): the model emits requirements only and code places the equipment. "Faithful" means exactly the station counts and floor size the brief asked for.</p>
   <div class="big" id="vsum"></div>
+  <p id="vnote"></p>
   <div class="wrap"><table id="val"></table></div>
 
   <h2>3. Simulator sanity: queue wait vs M/M/c formula</h2>
@@ -56,15 +57,22 @@ fetch('results.json').then((r) => r.json()).then((d) => {
       cell(pct(q.searchOnly?.gapPct)) + cell(pct(q.randomStart?.gapPct)) + '</tr>').join('');
   const v = d.validity;
   if (v) {
+    const big = (val, label, tone) => `<div><b class="${tone}">${Math.round(val * 100)}%</b><span>${label}</span></div>`;
     document.getElementById('vsum').innerHTML =
-      `<div><b class="warn">${Math.round(v.oneCallValidShare * 100)}%</b><span>valid, one call</span></div>` +
-      `<div><b class="good">${Math.round(v.harnessValidShare * 100)}%</b><span>valid, harness</span></div>` +
-      `<div><b class="${v.validButWrongStationCount ? 'warn' : ''}">${v.validButWrongStationCount}</b><span>valid but wrong station count</span></div>`;
+      big(v.oneCallValidShare, 'valid, one call', v.oneCallValidShare < 1 ? 'warn' : 'good') +
+      big(v.retryValidShare, 'valid, retry loop', v.retryValidShare < 1 ? 'warn' : 'good') +
+      big(v.placerValidShare, 'valid, plan + placer', v.placerValidShare < 1 ? 'warn' : 'good') +
+      big(v.retryFaithfulShare, 'faithful, retry loop', v.retryFaithfulShare < 1 ? 'warn' : 'good') +
+      big(v.placerFaithfulShare, 'faithful, plan + placer', v.placerFaithfulShare < 1 ? 'warn' : 'good');
+    document.getElementById('vnote').textContent = v.ambiguousBriefs
+      ? `${v.ambiguousBriefs} brief contradicts itself (it lists no storage station but says to put storage by the dock), so it has no single right answer. On the other ${v.n - v.ambiguousBriefs}, faithful is ${Math.round(v.retryFaithfulShareClearBriefs * 100)}% for the retry loop and ${Math.round(v.placerFaithfulShareClearBriefs * 100)}% for plan + placer. With ten briefs, one call's validity has ranged from 50% to 80% across runs.`
+      : '';
+    const yn = (ok, yes = 'valid', no = 'invalid') => cell(ok ? yes : no, ok ? 'good' : 'warn');
     document.getElementById('val').innerHTML =
-      '<tr><th>Plan</th><th>Stations asked</th><th>Stations got</th><th>Floor (m)</th><th>One call</th><th>Harness</th><th>Attempts</th><th>First error</th></tr>' +
-      v.rows.map((r) => '<tr>' + cell(r.id) + cell(r.stations) + cell(r.gotStations ?? '', r.gotStations !== undefined && r.gotStations !== r.stations ? 'warn' : '') + cell(r.floor) +
-        cell(r.firstCallValid ? 'valid' : 'invalid', r.firstCallValid ? 'good' : 'warn') + cell(r.harnessValid ? 'valid' : 'invalid', r.harnessValid ? 'good' : 'warn') +
-        cell(r.attempts) + cell(r.firstErrors?.[0] ?? r.apiError ?? '', 'note') + '</tr>').join('');
+      '<tr><th>Brief</th><th>Stations</th><th>Floor (m)</th><th>One call</th><th>Retry loop</th><th>Attempts</th><th>Retry faithful</th><th>Plan + placer</th><th>Placer faithful</th><th>Note</th></tr>' +
+      v.rows.map((r) => '<tr>' + cell(r.id + (r.ambiguous ? ' *' : '')) + cell(r.stations) + cell(r.floor) + yn(r.oneCallValid) + yn(r.retryValid) + cell(r.retryAttempts ?? '') +
+        yn(r.retryFaithful, 'yes', 'no') + yn(r.placerValid) + yn(r.placerFaithful, 'yes', 'no') +
+        cell(r.ambiguous ? 'ambiguous brief; ' + (r.placerNote ?? '') : (r.placerError ?? r.placerNote ?? r.retryFirstError ?? ''), 'note') + '</tr>').join('');
   }
   document.getElementById('queue').innerHTML =
     '<tr><th>Case</th><th>Theory wait (s)</th><th>Sim wait (s)</th><th>Error</th><th>Theory util</th><th>Sim util</th><th>Within 5%</th></tr>' +

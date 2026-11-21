@@ -46,9 +46,11 @@ Builders propose; checkers decide. Models never emit coordinates.
 Every stage appends a `TraceEvent`; the dark tracker in the UI is that trace,
 and clicking it opens the run log.
 
-Why this shape: in the eval below, a model placing stations directly was valid
-60% of the time and gained little over random starts once a search ran. So the
-model now decides what goes on the floor and code decides where.
+Why this shape: a model placing stations directly needed up to three attempts
+to pass the layout rules, and on the layout benchmark its starting point added
+little once a search ran. So the model decides what goes on the floor and code
+decides where. The Decisions check can also send a station count that
+contradicts the brief back to the planner for one revision.
 
 ## Seams for the other workstreams
 
@@ -76,24 +78,45 @@ All shared types are in `src/contracts.ts`.
 | cost | `src/engines/cost.ts` | build cost, cost per unit, kWh per unit, forklift travel per hour |
 | versions | `src/engines/versions.ts` | saved specs with metrics, parent and diff; compare any two |
 
-## Eval results (run of 2026-11-21, before the placer existed)
+## Eval results (run of 2026-11-21, against the shipped harness)
 
-| Check | One model call | Harness |
-| --- | --- | --- |
-| QAPLIB Nugent gap to best-known (nug12 / 15 / 20 / 30) | 18.3% / 36.5% / 8.0% / 13.4% | 0% / 0.9% / 1.3% / 1.6% |
-| Valid layouts on 10 unseen plans | 60% | 100% |
+`npm run eval` writes `public/eval/results.json`, shown at `/eval/index.html`.
 
-Simulator vs M/M/c queue formula: within 4% in all four cases.
+**Layout quality, QAPLIB Nugent instances (gap to best-known):**
 
-Where it breaks: on QAP most of the harness gain comes from the local search,
-not the model (the same search from a random start reaches 0% / 1.4% / 2.3% / 2.8%).
-One "valid" plan came back with a different number of stations than the plan
-asked for: validate() checks geometry, not faithfulness to the input.
+| Instance | One model call | Harness (model + search) | Search only, random start |
+| --- | --- | --- | --- |
+| nug12 | 10.7% | 0% | 0% |
+| nug15 | 4.9% | 0.2% | 1.4% |
+| nug20 | 6.5% | 0.2% | 2.3% |
+| nug30 | 11.3% | 3.2% | 2.8% |
+
+**Validity and faithfulness on 10 unseen briefs:**
+
+| | One call, model places | Retry loop, model places | Plan + placer (shipped) |
+| --- | --- | --- | --- |
+| Valid layouts | 80% | 100% | 100% |
+| Faithful to the brief | n/a | 90% | 90% |
+
+**Simulator vs M/M/c queue formula:** within 4% in all four cases.
+
+Where it breaks, and what the numbers do not show:
+
+- The search does most of the work on QAP. On nug30 the model's starting point
+  was worse than a random one (3.2% vs 2.8%).
+- The retry loop already reached 100% valid. The placer matches it rather than
+  beating it; what it adds is one planner call instead of up to three, and a
+  layout in milliseconds that is the same every time.
+- The placer's first version failed the three tightest briefs outright. It now
+  packs flush banks, back-to-back rows and quarter-turned rows.
+- The one unfaithful result is a brief that contradicts itself (no storage in
+  the equipment list, but "put storage beside the dock"). Both paths added a
+  storage station. Excluding it, both are 100% faithful.
+- Ten briefs is a small sample: one call's validity has been 50%, 60%, 80% and
+  80% across four runs today.
 
 ## Known rough edges
 
-- The eval's validity check measures the old path where the model emitted
-  coordinates (`readPlan`). It has not been re-run against the placer.
 - A plan can still be valid but unfaithful (wrong station count). The
   Decisions check on the Equipment screen flags doubtful steps but does not
   block.

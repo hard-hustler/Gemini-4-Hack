@@ -7,6 +7,7 @@ import { dockPoint, footprint, snap, type FactorySpec, type Point, type Rect, ty
 import { buildGrid, isFree, pointToCell } from './grid';
 import { route } from './route';
 import { localSearch } from './search';
+import { mulberry32 } from './simulate';
 import { gapBetween, MIN_AISLE_M, validate, type ValidationError } from './validate';
 
 const CELL = 0.5;
@@ -106,40 +107,59 @@ function legalise(stations: Station[], want: Point[], width: number, depth: numb
   return out;
 }
 
+interface RowStyle {
+  margin: number;
+  /** gap between neighbouring stations of different types */
+  gap: number;
+  aisle: number;
+  /** stations of the same type stand flush, as one bank */
+  bank: boolean;
+  /** rows stand back to back in pairs, sharing no aisle between the two */
+  paired: boolean;
+  /** fill each row before starting the next, instead of splitting evenly */
+  greedy: boolean;
+}
+
 /** Stations in process order along a serpentine: row one runs one way, row two comes back (a U for two rows). */
-function serpentine(stations: Station[], width: number, depth: number, margin: number, gap: number, aisle: number): Point[] | null {
-  const usable = width - 2 * margin;
-  // greedy row count, then split evenly so the last row is not a stub
-  let rows = 1;
-  let x = 0;
+function serpentine(stations: Station[], width: number, depth: number, st: RowStyle): Point[] | null {
+  const usable = width - 2 * st.margin;
+  const gapAfter = (row: Station[], i: number) => (i === row.length - 1 ? 0 : st.bank && row[i].type === row[i + 1].type ? 0 : st.gap);
+  const rowW = (row: Station[]) => row.reduce((t, s, i) => t + s.w + gapAfter(row, i), 0);
+  if (stations.some((s) => s.w > usable + EPS)) return null;
+
+  // greedy fill gives the fewest rows; an even split then avoids a stub last row
+  const greedyRows: Station[][] = [[]];
   for (const s of stations) {
-    if (s.w > usable + EPS) return null;
-    if (x > 0 && x + s.w > usable + EPS) {
-      rows++;
-      x = 0;
-    }
-    x += s.w + gap;
+    const row = greedyRows[greedyRows.length - 1];
+    if (row.length && rowW([...row, s]) > usable + EPS) greedyRows.push([s]);
+    else row.push(s);
   }
-  const perRow = Math.ceil(stations.length / rows);
-  const groups: Station[][] = [];
-  for (let r = 0; r * perRow < stations.length; r++) groups.push(stations.slice(r * perRow, (r + 1) * perRow));
-  const rowW = (row: Station[]) => row.reduce((t, s) => t + s.w, 0) + gap * (row.length - 1);
+  let groups = greedyRows;
+  if (!st.greedy) {
+    const perRow = Math.ceil(stations.length / greedyRows.length);
+    const even: Station[][] = [];
+    for (let r = 0; r * perRow < stations.length; r++) even.push(stations.slice(r * perRow, (r + 1) * perRow));
+    if (even.every((g) => rowW(g) <= usable + EPS)) groups = even;
+  }
+
   const rowD = (row: Station[]) => Math.max(...row.map((s) => s.d));
-  if (groups.some((g) => rowW(g) > usable + EPS)) return null;
-  const blockD = groups.reduce((t, g) => t + rowD(g), 0) + aisle * (groups.length - 1);
-  if (blockD > depth - 2 * margin + EPS) return null;
+  // paired: wall row, aisle, then rows back to back in twos
+  const aisleAfter = (r: number) => (r === groups.length - 1 ? 0 : st.paired && r % 2 === 1 ? 0 : st.aisle);
+  const blockD = groups.reduce((t, g, r) => t + rowD(g) + aisleAfter(r), 0);
+  if (blockD > depth - 2 * st.margin + EPS) return null;
   // centre the block on the floor so the rows read as one line with clear aisles all round
-  let y = snap((depth - blockD) / 2, CELL);
+  let y = st.margin + Math.floor((depth - 2 * st.margin - blockD) / 2 / CELL) * CELL;
   const out: Point[] = [];
   groups.forEach((row, r) => {
-    let cx = snap((width - rowW(row)) / 2, CELL);
-    const xs = row.map((s) => {
+    let cx = st.margin + Math.floor((usable - rowW(row)) / 2 / CELL) * CELL;
+    const xs = row.map((s, i) => {
       const at = cx;
-      cx += s.w + gap;
+      cx += s.w + gapAfter(row, i);
       return at;
     });
+    // in a pair, the second row sits against the back of the first
     row.forEach((s, i) => out.push({ x: r % 2 === 0 ? xs[i] : width - xs[i] - s.w, y }));
-    y += rowD(row) + aisle;
+    y += rowD(row) + aisleAfter(r);
   });
   return out;
 }
@@ -228,6 +248,25 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
     if (!best || len < best.len) best = { spec, len };
   };
 
+  const considerTurned = (want: Point[]) => {
+    tried++;
+    const legal = legalise(
+      stations.map((s) => ({ ...s, rot: 90 as const })),
+      want,
+      width,
+      depth,
+    );
+    if (!legal) return;
+    const spec = finish(base, legal, req);
+    const errs = validate(spec);
+    if (errs.length) {
+      lastErrors = errs;
+      return;
+    }
+    const len = route(spec).totals.forkliftM;
+    if (!best || len < best.len) best = { spec, len };
+  };
+
   // 1. A drawing wins: put things where they were drawn, nudged only as far as legality requires.
   const drawn = req.sketch.length >= Math.ceil(stations.length / 2);
   if (drawn) {
@@ -244,20 +283,39 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
     if (best) return { spec: (best as { spec: FactorySpec }).spec, method: 'as drawn', polished: false, polishScore: 1, variantsTried: tried };
   }
 
-  // 2. Otherwise a flow line: serpentine variants, mirrored four ways, shortest forklift tour wins.
-  for (const [margin, gap, aisle] of [
-    [1.5, 1.5, 2.5],
-    [1.5, 1.5, 2],
-    [1, 1.5, 1.5],
-    [1, 1.2, 1.2],
-    [0.5, 1.2, 1.2],
-  ] as const) {
-    const want = serpentine(stations, width, depth, margin, gap, aisle);
-    if (!want) continue;
+  // 2. Otherwise a flow line: serpentine variants from roomy to tight, mirrored four ways, each also
+  //    tried turned a quarter (rows running north-south). The shortest forklift tour of the first
+  //    style that fits wins.
+  const styles: RowStyle[] = [
+    { margin: 1.5, gap: 1.5, aisle: 2.5, bank: false, paired: false, greedy: false },
+    { margin: 1.5, gap: 1.5, aisle: 2, bank: false, paired: false, greedy: false },
+    { margin: 1, gap: 1.5, aisle: 1.5, bank: false, paired: false, greedy: false },
+    { margin: 1, gap: 1.2, aisle: 1.2, bank: true, paired: false, greedy: false },
+    { margin: 0.5, gap: 1.2, aisle: 1.2, bank: true, paired: false, greedy: true },
+    { margin: 0, gap: 1.2, aisle: 1.2, bank: true, paired: false, greedy: true },
+    { margin: 0, gap: 1.2, aisle: 1.2, bank: true, paired: true, greedy: true },
+    { margin: 0, gap: 0, aisle: 1.2, bank: true, paired: false, greedy: true },
+    { margin: 0, gap: 0, aisle: 1.2, bank: true, paired: true, greedy: true },
+  ];
+  for (const style of styles) {
+    const flat = serpentine(stations, width, depth, style);
+    // rows running north-south: lay the same stations out on the transposed floor, then turn each a quarter
+    const quarter = serpentine(stations, depth, width, style);
     for (const fx of [false, true])
-      for (const fy of [false, true])
-        consider(want.map((p, i) => ({ x: fx ? width - p.x - stations[i].w : p.x, y: fy ? depth - p.y - stations[i].d : p.y })));
+      for (const fy of [false, true]) {
+        if (flat) consider(flat.map((p, i) => ({ x: fx ? width - p.x - stations[i].w : p.x, y: fy ? depth - p.y - stations[i].d : p.y })));
+        if (quarter) {
+          // transpose back: the turned layout's x is our y
+          considerTurned(quarter.map((p, i) => ({ x: fx ? width - p.y - stations[i].d : p.y, y: fy ? depth - p.x - stations[i].w : p.x })));
+        }
+      }
     if (best) break;
+  }
+
+  // 3. Last resort: seeded random starting points, legalised.
+  if (!best) {
+    const rnd = mulberry32(11);
+    for (let k = 0; k < 150 && !best; k++) consider(stations.map((s) => ({ x: rnd() * (width - s.w), y: rnd() * (depth - s.d) })));
   }
   if (!best) {
     throw new PlaceError(
@@ -268,7 +326,7 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
   const start = (best as { spec: FactorySpec }).spec;
   if (opts.polish === false) return { spec: start, method: 'flow line', polished: false, polishScore: 1, variantsTried: tried };
 
-  // 3. Polish with the seeded search; dock walls stay where the brief put them.
+  // 4. Polish with the seeded search; dock walls stay where the brief put them.
   let polished = start;
   let score = 1;
   for (const seed of [1, 2, 3]) {
