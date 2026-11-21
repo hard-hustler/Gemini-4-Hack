@@ -2,9 +2,11 @@ import { Billboard, Line, OrbitControls, Text } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import type { CharacterRole, CharacterWalkPlan } from '../contracts';
 import type { Routes } from '../engines/route';
-import { dockPoint, footprint, snap, type FactorySpec, type Point, type Station } from '../spec';
 import type { MachineModel } from '../model3d';
+import { dockPoint, footprint, snap, type FactorySpec, type Point, type Station } from '../spec';
+import { AdvocateCharacters } from './AdvocateCharacters';
 import { BONE, Equipment, INK, ORANGE } from './Equipment';
 import { StudioEnv } from './ModelMesh';
 
@@ -14,6 +16,7 @@ export interface Layers {
   power: boolean;
   water: boolean;
   labels: boolean;
+  crew?: boolean;
 }
 
 export interface SceneProps {
@@ -23,13 +26,18 @@ export interface SceneProps {
   /** agent-built models by catalog id */
   models?: Record<string, MachineModel>;
   badIds?: string[];
+  highlightedIds?: string[];
   bottleneck?: string;
   selectedId?: string | null;
+  walkPlans?: CharacterWalkPlan[];
+  activeRole?: CharacterRole | null;
+  speakingRole?: CharacterRole | null;
   interactive?: boolean;
   /** pixels of the canvas covered by a panel on the right; the floor is centred in what is left */
   insetRight?: number;
   animate?: boolean;
   onSelect?: (id: string | null) => void;
+  onSelectCharacter?: (role: CharacterRole) => void;
   onDrag?: (id: string, x: number, y: number) => void;
   onDrop?: (id: string) => void;
 }
@@ -88,6 +96,7 @@ function StationNode({
   spec,
   s,
   bad,
+  flagged,
   hot,
   selected,
   showLabel,
@@ -102,6 +111,7 @@ function StationNode({
   spec: FactorySpec;
   s: Station;
   bad: boolean;
+  flagged: boolean;
   hot: boolean;
   selected: boolean;
   showLabel: boolean;
@@ -161,13 +171,13 @@ function StationNode({
   };
 
   const rotated = s.rot === 90 || s.rot === 270;
-  const ring = bad ? RED : selected ? ORANGE : hot ? RED : hover ? '#cbb89a' : null;
+  const ring = bad ? RED : flagged ? ORANGE : selected ? ORANGE : hot ? RED : hover ? '#cbb89a' : null;
   return (
     <group position={toWorld({ x: f.x + f.w / 2, y: f.y + f.d / 2 }, 0)}>
       {ring && (
         <mesh position={[0, 0.012, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[f.w + 0.5, f.d + 0.5]} />
-          <meshBasicMaterial color={ring} transparent opacity={bad ? 0.4 : selected ? 0.3 : hot ? 0.22 : 0.3} />
+          <planeGeometry args={[f.w + 0.55, f.d + 0.55]} />
+          <meshBasicMaterial color={ring} transparent opacity={bad ? 0.4 : flagged ? 0.36 : selected ? 0.3 : hot ? 0.22 : 0.3} />
         </mesh>
       )}
       <group rotation={[0, rotated ? Math.PI / 2 : 0, 0]}>
@@ -179,7 +189,12 @@ function StationNode({
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
       {showLabel && (label || bad) && (
-        <Label text={label || s.id} sub={bad ? 'not valid here' : hot ? 'bottleneck' : undefined} y={h + 0.75} tone={bad ? 'bad' : hot ? 'hot' : undefined} />
+        <Label
+          text={label || s.id}
+          sub={bad ? 'not valid here' : hot ? 'bottleneck' : undefined}
+          y={h + 0.75}
+          tone={bad ? 'bad' : hot || flagged ? 'hot' : undefined}
+        />
       )}
     </group>
   );
@@ -303,9 +318,7 @@ function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number
   const { width, depth } = spec.floor;
   useEffect(() => {
     const free = Math.max(320, size.width - insetRight);
-    // the floor's on-screen width is (w + d) / sqrt(2); its height is about 0.47 of (w + d) at this camera angle, plus equipment
     const zoom = Math.min(free / ((width + depth) * 0.86), size.height / ((width + depth) * 0.7));
-    // on screen, "right" is world (1, 0, -1) / sqrt(2) for this camera; shift the target so the floor sits in the free area
     const shift = insetRight / 2 / zoom / Math.SQRT2;
     const target = new THREE.Vector3(shift, 0, -shift);
     camera.position.set(target.x + 40, 50, target.z + 40);
@@ -321,7 +334,26 @@ function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number
   return null;
 }
 
-function World({ spec, routes, layers, models, badIds = [], bottleneck, selectedId, interactive = true, insetRight = 0, animate = true, onSelect, onDrag, onDrop }: SceneProps) {
+function World({
+  spec,
+  routes,
+  layers,
+  models,
+  badIds = [],
+  highlightedIds = [],
+  bottleneck,
+  selectedId,
+  walkPlans = [],
+  activeRole,
+  speakingRole,
+  interactive = true,
+  insetRight = 0,
+  animate = true,
+  onSelect,
+  onSelectCharacter,
+  onDrag,
+  onDrop,
+}: SceneProps) {
   const toWorld = useToWorld(spec);
   const tour = useTour(spec, routes);
   const span = Math.max(spec.floor.width, spec.floor.depth);
@@ -343,6 +375,7 @@ function World({ spec, routes, layers, models, badIds = [], bottleneck, selected
           spec={spec}
           s={s}
           bad={badIds.includes(s.id)}
+          flagged={highlightedIds.includes(s.id)}
           hot={bottleneck === s.type}
           selected={selectedId === s.id}
           showLabel={layers.labels}
@@ -373,6 +406,16 @@ function World({ spec, routes, layers, models, badIds = [], bottleneck, selected
           <meshStandardMaterial color="#5b8fd6" roughness={0.8} />
         </mesh>
       )}
+      {layers.crew && walkPlans.length > 0 && (
+        <AdvocateCharacters
+          spec={spec}
+          walkPlans={walkPlans}
+          activeRole={activeRole}
+          speakingRole={speakingRole}
+          animate={animate}
+          onSelectCharacter={onSelectCharacter}
+        />
+      )}
       <OrbitControls makeDefault enableRotate={interactive} enablePan={interactive} enableZoom={interactive} maxPolarAngle={Math.PI / 2.15} minZoom={8} maxZoom={160} />
       <FitCamera spec={spec} insetRight={insetRight} />
     </>
@@ -380,13 +423,22 @@ function World({ spec, routes, layers, models, badIds = [], bottleneck, selected
 }
 
 export function Scene(props: SceneProps) {
-  // r3f sizes the canvas from a measured container; nudge a re-measure once layout has settled
   useEffect(() => {
     const t = setTimeout(() => window.dispatchEvent(new Event('resize')), 80);
     return () => clearTimeout(t);
   }, []);
   return (
-    <Canvas flat shadows orthographic camera={{ position: [40, 50, 40], zoom: 30, near: -200, far: 600 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
+    <Canvas
+      flat
+      shadows
+      orthographic
+      camera={{ position: [40, 50, 40], zoom: 30, near: -200, far: 600 }}
+      dpr={[1, 2]}
+      gl={{ antialias: true, alpha: true }}
+      onCreated={({ gl }) => {
+        gl.domElement.addEventListener('webglcontextlost', (e) => e.preventDefault(), false);
+      }}
+    >
       <World {...props} />
     </Canvas>
   );

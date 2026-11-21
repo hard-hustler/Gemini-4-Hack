@@ -21,6 +21,14 @@ const PATHS: Record<string, ReactNode> = {
   rotate: <path d="M12.5 8a4.5 4.5 0 11-1.6-3.4M12.5 3v2.5H10" />,
   list: <path d="M5.5 4h7.5M5.5 8h7.5M5.5 12h7.5M2.8 4h.1M2.8 8h.1M2.8 12h.1" />,
   warn: <path d="M8 2.5l6 10.5H2L8 2.5zM8 6.5v3M8 11.2v.1" />,
+  play: <path d="M5 3.5l8 4.5-8 4.5V3.5z" />,
+  pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
+  prev: <path d="M4 3.5v9M12 3.5l-6 4.5 6 4.5V3.5z" />,
+  next: <path d="M12 3.5v9M4 3.5l6 4.5-6 4.5V3.5z" />,
+  volume: <path d="M3 6.5h2.5L9 3.5v9L5.5 9.5H3v-3zM11.5 5.5a3.5 3.5 0 010 5M13.3 3.8a6 6 0 010 8.4" />,
+  volumeOff: <path d="M3 6.5h2.5L9 3.5v9L5.5 9.5H3v-3zM11.5 6l3 4M14.5 6l-3 4" />,
+  shield: <path d="M8 2.5l5 2v3.6c0 3-2.1 5.1-5 5.9-2.9-.8-5-2.9-5-5.9V4.5l5-2z" />,
+  wrench: <path d="M10.8 2.8a3.2 3.2 0 00-4 4l-3.8 3.8a1.4 1.4 0 002 2l3.8-3.8a3.2 3.2 0 004-4L11 6.6 9.4 5l1.4-2.2z" />,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof PATHS | string; size?: number }) {

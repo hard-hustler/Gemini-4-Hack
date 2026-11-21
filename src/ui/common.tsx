@@ -10,8 +10,29 @@ export function Wordmark({ onClick }: { onClick?: () => void }) {
   );
 }
 
-const ACTOR: Record<TraceEvent['actor'], string> = { hydrogen: 'Hydrogen', neon: 'Neon', decisions: 'Decisions', agent: 'Managed agent', engine: 'Engine', shop: 'Shop' };
-const STAGE: Record<TraceEvent['stage'], string> = { research: 'Research', read: 'Read', plan: 'Plan', check: 'Check', equip: 'Equip', place: 'Place', simulate: 'Simulate', improve: 'Improve', convert: 'Convert' };
+const ACTOR: Record<TraceEvent['actor'], string> = {
+  hydrogen: 'Hydrogen',
+  neon: 'Neon',
+  decisions: 'Decisions',
+  agent: 'Managed agent',
+  engine: 'Engine',
+  shop: 'Shop',
+  advocate: 'Advocate panel',
+  fixer: 'Elena Vasquez',
+};
+const STAGE: Record<TraceEvent['stage'], string> = {
+  read: 'Read',
+  research: 'Research',
+  plan: 'Plan',
+  check: 'Check',
+  equip: 'Equip',
+  place: 'Place',
+  simulate: 'Simulate',
+  improve: 'Improve',
+  convert: 'Convert',
+  advocate: 'Audit',
+  fix: 'Fix',
+};
 const ms = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${v} ms`);
 
 export function RunLog({ events }: { events: TraceEvent[] }) {

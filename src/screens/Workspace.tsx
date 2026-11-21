@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { TraceEvent } from '../contracts';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AdvocateFinding, AdvocateReport, AdvocateRole, CharacterRole, FixProposal, TraceEvent } from '../contracts';
+import { ADVOCATE_CHARACTERS, ADVOCATE_ROLES, runDeterministicAdvocateAudit } from '../engines/advocate';
 import { compare, evaluate, makeVersion, type Version } from '../engines/versions';
 import { validate, type ValidationError } from '../engines/validate';
 import { applyOp, type EditOp, type FactorySpec } from '../spec';
-import { apiStream, ApiError, money, num, type Project } from '../store';
+import { api, apiStream, ApiError, money, num, type Project } from '../store';
 import { startRecording, type Recorder } from '../ui/audio';
 import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
 import { Icon } from '../ui/icons';
@@ -20,24 +21,36 @@ interface Tried {
   name: string;
   reason: string;
   source: 'neon' | 'search';
-  outcome: 'kept' | 'simulated' | 'gated out' | 'rejected';
+  outcome: 'kept' | 'simulated' | 'gated out' | 'rejected' | 'vetoed';
   errors?: string[];
+  vetoReasons?: string[];
   gate?: number;
   deltas?: Deltas;
 }
 interface ImproveResult {
   goalLabel: string;
   explanation: string;
-  rounds: { n: number; tried: Tried[]; kept?: string; ms: number }[];
+  rounds: { n: number; tried: Tried[]; kept?: string; advocateVerdict?: AdvocateReport['verdict']; ms: number }[];
   kept: { round: number; name: string; spec: FactorySpec }[];
   deltas: Deltas;
   meetsDemand: boolean;
+  advocateReport?: AdvocateReport | null;
   stopped: string;
   ms: number;
 }
 interface SandboxResult {
   explanation: string;
   candidates: { name: string; status: 'evaluated' | 'invalid' | 'gated_out'; spec?: FactorySpec; errors?: string[]; deltas?: Deltas & { forkliftM: number } }[];
+}
+
+interface ActiveSpeech {
+  role: CharacterRole;
+  targetLabel: string;
+  text: string;
+  findingId?: string;
+  loading: boolean;
+  playing: boolean;
+  error?: string;
 }
 
 const describeOp = (op: EditOp): string => {
@@ -57,7 +70,7 @@ const describeOp = (op: EditOp): string => {
   }
 };
 
-const PANEL = 380;
+const PANEL = 396;
 
 /** True on screens too narrow for the panel to sit beside the floor. */
 function useNarrow() {
@@ -71,6 +84,7 @@ function useNarrow() {
   }, []);
   return narrow;
 }
+
 type Tab = 'overview' | 'improve' | 'equipment' | 'versions';
 const GOALS: { id: Goal; label: string }[] = [
   { id: 'cost', label: 'Cost per unit' },
@@ -92,7 +106,6 @@ function Stat({ label, value, unit, sub, tone }: { label: string; value: string;
 }
 
 function DeltaLine({ d }: { d: Deltas }) {
-  // a change that rounds to zero is shown as no change, without a sign or a colour
   const part = (v: number, shown: string, unit: string, goodWhenNegative = true) => {
     const zero = !/[1-9]/.test(shown);
     return (
@@ -116,7 +129,7 @@ function CompareModal({ versions, a, b, models, onPick, onClose }: { versions: V
   const rows = compare(a.metrics, b.metrics);
   const evA = useMemo(() => evaluate(a.spec, 2), [a]);
   const evB = useMemo(() => evaluate(b.spec, 2), [b]);
-  const layers: Layers = { flow: true, routes: false, power: false, water: false, labels: false };
+  const layers: Layers = { flow: true, routes: false, power: false, water: false, labels: false, crew: false };
   return (
     <div className="scrim center" onClick={onClose}>
       <div className="compare" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Compare versions">
@@ -191,17 +204,30 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const [draft, setDraft] = useState<FactorySpec>(current.spec);
   const [preview, setPreview] = useState<FactorySpec | null>(null);
   const [rejected, setRejected] = useState<ValidationError[]>([]);
-  const [layers, setLayers] = useState<Layers>({ flow: true, routes: false, power: false, water: false, labels: true });
+  const [layers, setLayers] = useState<Layers>({ flow: true, routes: false, power: false, water: false, labels: true, crew: true });
   const [tab, setTab] = useState<Tab>('overview');
   const [selected, setSelected] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; title: string; lines: string[] } | null>(null);
   const [command, setCommand] = useState('');
   const [recording, setRecording] = useState(false);
   const [goal, setGoal] = useState<Goal>('cost');
-  const [mode, setMode] = useState<'improve' | 'sandbox' | null>(null);
+  const [mode, setMode] = useState<'improve' | 'sandbox' | 'audit' | 'fix' | null>(null);
   const [improved, setImproved] = useState<(ImproveResult & { saved: string[] }) | null>(null);
   const [sandbox, setSandbox] = useState<SandboxResult | null>(null);
   const [cmp, setCmp] = useState<{ a: string; b: string } | null>(null);
+
+  // Devil's Advocate, Surgical Fixer, and Real-Time Character Voice state
+  const [serverAudit, setServerAudit] = useState<AdvocateReport | null>(null);
+  const [roleFilter, setRoleFilter] = useState<AdvocateRole | 'all'>('all');
+  const [activeFindingId, setActiveFindingId] = useState<string | null>(null);
+  const [fixProposal, setFixProposal] = useState<FixProposal | null>(null);
+  const [speech, setSpeech] = useState<ActiveSpeech | null>(null);
+  const [muted, setMuted] = useState(false);
+  const [walkthroughIdx, setWalkthroughIdx] = useState<number | null>(null);
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speechTokenRef = useRef(0);
+  const walkTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const recorder = useRef<Recorder | null>(null);
   const run = useRun();
   const busy = run.busy;
@@ -210,17 +236,180 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   useEffect(() => {
     setDraft(current.spec);
     setRejected([]);
+    setServerAudit(null);
+    setFixProposal(null);
   }, [current.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Stop any audio / timers cleanly on unmount
+  const stopAudio = useCallback(() => {
+    speechTokenRef.current++;
+    clearTimeout(walkTimerRef.current);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+      audioRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopAudio(), [stopAudio]);
 
   const evaluation = useMemo(() => evaluate(draft), [draft]);
   const previewErrors = useMemo(() => (preview ? validate(preview) : []), [preview]);
   const metrics = evaluation.ok ? evaluation.metrics : current.metrics;
   const sim = metrics.sim;
   const dirty = JSON.stringify(draft) !== JSON.stringify(current.spec);
-  const shown = preview ?? draft;
+
+  // Live deterministic 5-agent audit so characters walk the floor immediately
+  const deterministicAudit = useMemo<AdvocateReport | null>(() => {
+    if (!evaluation.ok) return null;
+    return runDeterministicAdvocateAudit(draft, evaluation.metrics, evaluation.routes, project.requirements);
+  }, [draft, evaluation, project.requirements]);
+
+  const activeAudit = fixProposal ? fixProposal.postAudit : serverAudit ?? deterministicAudit;
+  const shown = preview ?? fixProposal?.spec ?? draft;
+  const shownEval = useMemo(() => (fixProposal ? evaluate(fixProposal.spec, 12) : evaluation), [fixProposal, evaluation]);
+  const shownRoutes = !preview && shownEval.ok ? shownEval.routes : null;
+
   const v1 = versions[0];
   const nextN = Math.max(...versions.map((v) => v.n)) + 1;
   const hot = sim.bottleneck.utilisation >= 0.85;
+
+  const findings = activeAudit?.findings ?? [];
+  const filteredFindings = useMemo(
+    () => (roleFilter === 'all' ? findings : findings.filter((f) => f.role === roleFilter)),
+    [findings, roleFilter],
+  );
+  const activeFinding = findings.find((f) => f.id === activeFindingId) ?? null;
+
+  // Highlighted stations on the 3D floor for the selected finding or proposed fix
+  const highlightedIds = useMemo(() => {
+    if (fixProposal) {
+      const ids = fixProposal.ops
+        .map((o) => ('id' in o ? o.id : o.op === 'add' ? o.station.id : null))
+        .filter((x): x is string => Boolean(x));
+      return ids;
+    }
+    if (activeFinding) return activeFinding.targetIds;
+    return [];
+  }, [fixProposal, activeFinding]);
+
+  const activeRole: CharacterRole | null = fixProposal
+    ? 'fixer'
+    : speech?.role ?? activeFinding?.role ?? (roleFilter !== 'all' ? roleFilter : null);
+  const speakingRole: CharacterRole | null = speech && (speech.playing || speech.loading) ? speech.role : null;
+
+  /** Speak a line as one of the 6 3D floor characters via Gemini 3.8 TTS (/api/advocate/speak). */
+  const speakAs = useCallback(
+    async (role: CharacterRole, text: string, targetLabel: string, findingId?: string, onFinished?: () => void) => {
+      stopAudio();
+      const token = ++speechTokenRef.current;
+      setLayers((l) => (l.crew ? l : { ...l, crew: true }));
+      setSpeech({ role, targetLabel, text, findingId, loading: !muted, playing: muted });
+
+      if (muted) {
+        if (onFinished) {
+          walkTimerRef.current = setTimeout(() => {
+            if (speechTokenRef.current === token) onFinished();
+          }, 4200);
+        }
+        return;
+      }
+
+      try {
+        const res = await api<{ audioBase64: string; mimeType: string }>('/api/advocate/speak', { role, text });
+        if (speechTokenRef.current !== token) return;
+        const audio = new Audio(`data:${res.mimeType || 'audio/wav'};base64,${res.audioBase64}`);
+        audioRef.current = audio;
+        audio.onended = () => {
+          if (speechTokenRef.current !== token) return;
+          setSpeech((cur) => (cur ? { ...cur, playing: false, loading: false } : null));
+          if (onFinished) {
+            walkTimerRef.current = setTimeout(() => {
+              if (speechTokenRef.current === token) onFinished();
+            }, 650);
+          }
+        };
+        audio.onerror = () => {
+          if (speechTokenRef.current !== token) return;
+          setSpeech((cur) => (cur ? { ...cur, playing: false, loading: false, error: 'Browser blocked audio playback; reading caption instead.' } : null));
+        };
+        setSpeech({ role, targetLabel, text, findingId, loading: false, playing: true });
+        await audio.play().catch(() => {
+          if (speechTokenRef.current !== token) return;
+          setSpeech((cur) => (cur ? { ...cur, playing: false, loading: false, error: 'Click play to enable browser audio.' } : null));
+        });
+      } catch (e) {
+        if (speechTokenRef.current !== token) return;
+        setSpeech({
+          role,
+          targetLabel,
+          text,
+          findingId,
+          loading: false,
+          playing: false,
+          error: (e as Error).message,
+        });
+        if (onFinished) {
+          walkTimerRef.current = setTimeout(() => {
+            if (speechTokenRef.current === token) onFinished();
+          }, 4000);
+        }
+      }
+    },
+    [muted, stopAudio],
+  );
+
+  const hearFinding = useCallback(
+    (f: AdvocateFinding, onFinished?: () => void) => {
+      setActiveFindingId(f.id);
+      if (f.targetIds[0]) setSelected(f.targetIds[0]);
+      const target = f.targetIds.length ? f.targetIds.join(', ') : 'Floor';
+      void speakAs(f.role, f.spokenLine, target, f.id, onFinished);
+    },
+    [speakAs],
+  );
+
+  // Guided multi-character floor walkthrough
+  const startWalkthroughAt = useCallback(
+    (idx: number) => {
+      if (!findings.length || idx < 0 || idx >= findings.length) {
+        setWalkthroughIdx(null);
+        return;
+      }
+      setWalkthroughIdx(idx);
+      const f = findings[idx];
+      hearFinding(f, () => {
+        if (idx + 1 < findings.length) startWalkthroughAt(idx + 1);
+        else setWalkthroughIdx(null);
+      });
+    },
+    [findings, hearFinding],
+  );
+
+  const stopWalkthrough = useCallback(() => {
+    setWalkthroughIdx(null);
+    stopAudio();
+    setSpeech(null);
+  }, [stopAudio]);
+
+  const handleSelectCharacter = useCallback(
+    (role: CharacterRole) => {
+      setTab('improve');
+      if (role === 'fixer' && fixProposal) {
+        void speakAs('fixer', fixProposal.spokenSummary, 'Proposed fix');
+        return;
+      }
+      const match = findings.find((f) => f.role === role);
+      if (match) {
+        setWalkthroughIdx(null);
+        hearFinding(match);
+      } else {
+        const char = ADVOCATE_CHARACTERS[role];
+        void speakAs(role, `I am ${char.name}, ${char.title}. I have no open objections on this floor right now.`, 'Floor clear');
+      }
+    },
+    [findings, fixProposal, hearFinding, speakAs],
+  );
 
   /** Run a streamed harness call; its steps land in the tracker live and in the project's run log after. */
   const call = async <T,>(label: string, path: string, body: unknown): Promise<T | null> => {
@@ -251,6 +440,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     if (errs.length) setRejected(errs);
     else {
       setRejected([]);
+      setServerAudit(null);
+      setFixProposal(null);
       setDraft(next);
     }
   };
@@ -260,6 +451,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
       if (previewErrors.length) setRejected(previewErrors);
       else {
         setRejected([]);
+        setServerAudit(null);
+        setFixProposal(null);
         setDraft(preview);
       }
     }
@@ -277,6 +470,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     if (!out) return;
     if (!out.ops.length) return void setNotice({ tone: 'error', title: `Nothing changed for “${out.transcript}”`, lines: [out.reason] });
     setDraft(out.spec);
+    setServerAudit(null);
+    setFixProposal(null);
     setRejected([]);
     setCommand('');
     setNotice({ tone: 'ok', title: `“${out.transcript}”`, lines: out.ops.map(describeOp) });
@@ -302,12 +497,83 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     }
   };
 
-  /** The agent loop. Each change it keeps becomes a version, so the timeline shows how it got there. */
+  /** Full 5-agent Devil's Advocate audit with Gemini Decisions calibration + Neon spoken briefings. */
+  const runFullAudit = async () => {
+    setMode('audit');
+    setFixProposal(null);
+    setLayers((l) => ({ ...l, crew: true }));
+    const out = await call<AdvocateReport>('5 inspectors auditing floor', '/api/advocate/audit', {
+      spec: draft,
+      requirements: project.requirements,
+    });
+    if (!out) return;
+    setServerAudit(out);
+    if (out.findings.length > 0) {
+      setActiveFindingId(out.findings[0].id);
+      setNotice({
+        tone: out.verdict === 'veto' ? 'error' : 'ok',
+        title: `Devil’s Advocate audit: ${out.blockerCount} blocker${out.blockerCount === 1 ? '' : 's'}, ${out.warningCount} warning${out.warningCount === 1 ? '' : 's'}`,
+        lines: [out.summary],
+      });
+    } else {
+      setNotice({ tone: 'ok', title: 'All 5 Devil’s Advocate inspectors cleared this floor', lines: [out.summary] });
+    }
+  };
+
+  /** Surgical Fixer (Elena Vasquez): draft & simulate a verified patch for 1 finding or all findings. */
+  const requestFix = async (targetList: AdvocateFinding[]) => {
+    if (!targetList.length) return;
+    setMode('fix');
+    setWalkthroughIdx(null);
+    setLayers((l) => ({ ...l, crew: true }));
+    const out = await call<FixProposal>('Elena Vasquez drafting surgical fix', '/api/advocate/fix', {
+      spec: draft,
+      findings: targetList,
+      requirements: project.requirements,
+    });
+    if (!out) return;
+    setFixProposal(out);
+    void speakAs('fixer', out.spokenSummary, `${out.ops.length} op fix preview`);
+  };
+
+  const applyFixProposal = () => {
+    if (!fixProposal) return;
+    const ev = evaluate(fixProposal.spec);
+    if (!ev.ok) {
+      setRejected(ev.errors);
+      return;
+    }
+    const v = makeVersion(fixProposal.spec, ev.metrics, current, nextN, `Fixer: ${fixProposal.summary.split(' — ')[0]}`);
+    stopAudio();
+    setSpeech(null);
+    setDraft(fixProposal.spec);
+    setServerAudit(fixProposal.postAudit);
+    setFixProposal(null);
+    setRejected([]);
+    onChange({ versions: [...versions, v], currentId: v.id });
+    setNotice({
+      tone: 'ok',
+      title: `Saved Elena Vasquez’s fix as ${v.id}`,
+      lines: [
+        fixProposal.resolvedCount > 0
+          ? `Resolved ${fixProposal.resolvedCount} issue${fixProposal.resolvedCount === 1 ? '' : 's'} · ${fixProposal.remainingBlockers} blocker${fixProposal.remainingBlockers === 1 ? '' : 's'} remaining.`
+          : `Saved verified layout update · ${fixProposal.remainingBlockers} blocker${fixProposal.remainingBlockers === 1 ? '' : 's'} remaining.`,
+      ],
+    });
+  };
+
+  /** The Improve loop with automatic 5-agent Devil's Advocate gate on every round. */
   const improve = async () => {
     setMode('improve');
     setImproved(null);
     setSandbox(null);
-    const out = await call<ImproveResult>('Starting', '/api/improve', { spec: draft, goal });
+    setFixProposal(null);
+    setLayers((l) => ({ ...l, crew: true }));
+    const out = await call<ImproveResult>('Starting Improve + Devil’s Advocate gate', '/api/improve', {
+      spec: draft,
+      goal,
+      requirements: project.requirements,
+    });
     if (!out) return;
     const added: Version[] = [];
     let parent = current;
@@ -318,10 +584,11 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     }
     for (const k of out.kept) {
       const ev = evaluate(k.spec);
-      if (!ev.ok) continue; // the server validated it; this is belt and braces
+      if (!ev.ok) continue;
       parent = makeVersion(k.spec, ev.metrics, parent, n++, `Agent, round ${k.round}: ${k.name}`);
       added.push(parent);
     }
+    if (out.advocateReport) setServerAudit(out.advocateReport);
     setImproved({ ...out, saved: added.filter((v) => v.label.startsWith('Agent')).map((v) => v.id) });
     if (added.length) onChange({ versions: [...versions, ...added], currentId: parent.id });
   };
@@ -338,6 +605,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     const errs = validate(spec);
     if (errs.length) return void setRejected(errs);
     setDraft(spec);
+    setServerAudit(null);
+    setFixProposal(null);
     setRejected([]);
     setNotice({ tone: 'ok', title: `Applied “${name}” to the draft`, lines: ['Save it as a version to keep it.'] });
   };
@@ -364,7 +633,9 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   }, [draft]);
   const cmpA = cmp && versions.find((v) => v.id === cmp.a);
   const cmpB = cmp && versions.find((v) => v.id === cmp.b);
-  const outcomeIcon = { kept: 'check', simulated: 'minus', 'gated out': 'minus', rejected: 'x' } as const;
+  const outcomeIcon = { kept: 'check', simulated: 'minus', 'gated out': 'minus', rejected: 'x', vetoed: 'shield' } as const;
+
+  const totalOpenFindings = findings.filter((f) => f.severity !== 'advisory').length;
 
   return (
     <div className="page workspace">
@@ -381,14 +652,19 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
       <div className="stage">
         <Scene
           spec={shown}
-          routes={!preview && evaluation.ok ? evaluation.routes : null}
+          routes={shownRoutes}
           layers={layers}
           models={project.models}
           badIds={previewErrors.flatMap((e) => e.ids)}
+          highlightedIds={highlightedIds}
           bottleneck={hot ? sim.bottleneck.name : undefined}
           selectedId={selected}
+          walkPlans={activeAudit?.walkPlans ?? []}
+          activeRole={activeRole}
+          speakingRole={speakingRole}
           insetRight={narrow ? 0 : PANEL + 14}
           onSelect={setSelected}
+          onSelectCharacter={handleSelectCharacter}
           onDrag={onDrag}
           onDrop={onDrop}
         />
@@ -398,7 +674,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
         <h1>{project.name}</h1>
         <p>
           {current.id}
-          {dirty ? ', with unsaved changes' : ''} · {draft.floor.width} × {draft.floor.depth} m · {draft.stations.length} stations
+          {fixProposal ? ' · previewing fix' : dirty ? ', with unsaved changes' : ''} · {draft.floor.width} × {draft.floor.depth} m · {draft.stations.length} stations
         </p>
       </div>
 
@@ -410,9 +686,10 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
             ['power', 'Power'],
             ['water', 'Water'],
             ['labels', 'Labels'],
+            ['crew', 'Crew'],
           ] as const
         ).map(([k, label]) => (
-          <button key={k} className={layers[k] ? 'on' : ''} aria-pressed={layers[k]} onClick={() => setLayers({ ...layers, [k]: !layers[k] })}>
+          <button key={k} className={layers[k] ? 'on' : ''} aria-pressed={Boolean(layers[k])} onClick={() => setLayers({ ...layers, [k]: !layers[k] })}>
             {label}
           </button>
         ))}
@@ -423,6 +700,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           {(['overview', 'improve', 'equipment', 'versions'] as const).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
               {t[0].toUpperCase() + t.slice(1)}
+              {t === 'improve' && totalOpenFindings > 0 && <em>{totalOpenFindings}</em>}
               {t === 'versions' && <em>{versions.length}</em>}
             </button>
           ))}
@@ -450,6 +728,37 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   </p>
                 )}
               </div>
+              {activeAudit && (
+                <div className="section">
+                  <div className="adv-head">
+                    <h3>Floor review (5 agents)</h3>
+                    <span className={`adv-verdict ${activeAudit.verdict}`}>
+                      {activeAudit.blockerCount > 0
+                        ? `${activeAudit.blockerCount} blocker${activeAudit.blockerCount > 1 ? 's' : ''}`
+                        : activeAudit.warningCount > 0
+                          ? `${activeAudit.warningCount} warning${activeAudit.warningCount > 1 ? '' : 's'}`
+                          : 'Cleared'}
+                    </span>
+                  </div>
+                  <p className="say">{activeAudit.summary}</p>
+                  <div className="row">
+                    <button className="ghost sm" onClick={() => setTab('improve')}>
+                      <Icon name="shield" size={14} /> Open review
+                    </button>
+                    {findings.length > 0 && (
+                      <button
+                        className="text sm"
+                        onClick={() => {
+                          setTab('improve');
+                          startWalkthroughAt(0);
+                        }}
+                      >
+                        <Icon name="play" size={14} /> Play walkthrough
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="section">
                 <h3>How busy each step is</h3>
                 <div className="utils">
@@ -523,7 +832,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           {tab === 'improve' && (
             <>
               <div className="section">
-                <h3>Meet demand, then go for the lowest</h3>
+                <h3>Meet demand, clear the 5-agent gate, optimise</h3>
                 <div className="segmented" role="radiogroup" aria-label="Goal">
                   {GOALS.map((g) => (
                     <button key={g.id} role="radio" aria-checked={goal === g.id} className={goal === g.id ? 'on' : ''} disabled={busy} onClick={() => setGoal(g.id)}>
@@ -532,11 +841,14 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   ))}
                 </div>
                 <div className="row">
-                  <button className="primary" disabled={busy} onClick={() => void improve()}>
-                    Improve this layout
+                  <button className="primary sm" disabled={busy} onClick={() => void improve()}>
+                    Improve layout
                   </button>
-                  <button className="text" disabled={busy} onClick={() => void deepSearch()} title="A managed agent runs eight seeded searches in a remote sandbox">
-                    Search in a sandbox
+                  <button className="ghost sm" disabled={busy} onClick={() => void runFullAudit()}>
+                    <Icon name="shield" size={14} /> Audit floor
+                  </button>
+                  <button className="text sm" disabled={busy} onClick={() => void deepSearch()} title="A managed agent runs eight seeded searches in a remote sandbox">
+                    Sandbox
                   </button>
                 </div>
               </div>
@@ -556,6 +868,154 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Surgical Fixer Preview (Elena Vasquez) */}
+              {!busy && fixProposal && (
+                <div className="section fix-preview">
+                  <div className="fix-preview-head">
+                    <b>
+                      <span className="adv-dot" style={{ background: ADVOCATE_CHARACTERS.fixer.accent }} />
+                      Elena Vasquez · Proposed fix
+                    </b>
+                    <button className="text sm" onClick={() => void speakAs('fixer', fixProposal.spokenSummary, 'Proposed fix')}>
+                      <Icon name="volume" size={14} /> Hear
+                    </button>
+                  </div>
+                  <p className="say">{fixProposal.summary}</p>
+                  <DeltaLine d={fixProposal.deltas} />
+                  <p className="muted small num">
+                    Resolves {fixProposal.resolvedCount} finding{fixProposal.resolvedCount === 1 ? '' : 's'} · {fixProposal.remainingBlockers} blocker{fixProposal.remainingBlockers === 1 ? '' : 's'} and {fixProposal.remainingWarnings} warning{fixProposal.remainingWarnings === 1 ? '' : 's'} remaining
+                  </p>
+                  <ul className="fix-ops">
+                    {fixProposal.ops.slice(0, 5).map((op, i) => (
+                      <li key={i}>{describeOp(op)}</li>
+                    ))}
+                  </ul>
+                  <div className="row">
+                    <button className="primary sm" onClick={applyFixProposal}>
+                      <Icon name="check" size={14} /> Apply & save as v{nextN}
+                    </button>
+                    <button
+                      className="ghost sm"
+                      onClick={() => {
+                        setFixProposal(null);
+                        stopAudio();
+                        setSpeech(null);
+                      }}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 5-Agent Devil's Advocate Review Ledger */}
+              {activeAudit && (
+                <div className="section">
+                  <div className="adv-head">
+                    <h3>Devil’s Advocate Review</h3>
+                    <span className={`adv-verdict ${activeAudit.verdict}`}>
+                      {activeAudit.blockerCount} blocker{activeAudit.blockerCount === 1 ? '' : 's'} · {activeAudit.warningCount} warning{activeAudit.warningCount === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <p className="muted small">
+                    Click any inspector on the 3D floor or below to hear their critique aloud.
+                    {activeAudit.mode === 'full' ? ' Calibrated with Gemini Decisions.' : ''}
+                  </p>
+
+                  <div className="row">
+                    {walkthroughIdx !== null ? (
+                      <button className="ghost sm" onClick={stopWalkthrough}>
+                        <Icon name="stop" size={13} /> Stop walkthrough
+                      </button>
+                    ) : (
+                      <button className="ghost sm" disabled={!findings.length} onClick={() => startWalkthroughAt(0)}>
+                        <Icon name="play" size={13} /> Play walkthrough
+                      </button>
+                    )}
+                    <button
+                      className="primary sm"
+                      disabled={busy || !findings.length}
+                      onClick={() => void requestFix(findings.filter((f) => f.severity !== 'advisory').length ? findings.filter((f) => f.severity !== 'advisory') : findings)}
+                    >
+                      <Icon name="wrench" size={13} /> Preview fix all
+                    </button>
+                  </div>
+
+                  {/* 5 Inspector Filter Strip */}
+                  <div className="adv-crew" role="group" aria-label="Filter by inspector">
+                    <button className={`adv-crew-btn${roleFilter === 'all' ? ' on' : ''}`} onClick={() => setRoleFilter('all')}>
+                      All <em>{findings.length}</em>
+                    </button>
+                    {ADVOCATE_ROLES.map((role) => {
+                      const char = ADVOCATE_CHARACTERS[role];
+                      const count = findings.filter((f) => f.role === role).length;
+                      return (
+                        <button
+                          key={role}
+                          className={`adv-crew-btn${roleFilter === role ? ' on' : ''}`}
+                          onClick={() => {
+                            setRoleFilter(roleFilter === role ? 'all' : role);
+                            const first = findings.find((f) => f.role === role);
+                            if (first) setActiveFindingId(first.id);
+                          }}
+                          title={`${char.name} — ${char.title}`}
+                        >
+                          <span className="adv-dot" style={{ background: char.accent }} />
+                          {char.name.split(' ')[0]} <em>{count}</em>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Findings Ledger */}
+                  <div className="adv-list">
+                    {filteredFindings.length === 0 ? (
+                      <p className="muted small">No findings flagged by {roleFilter === 'all' ? 'the panel' : ADVOCATE_CHARACTERS[roleFilter].name}.</p>
+                    ) : (
+                      filteredFindings.map((f) => {
+                        const char = ADVOCATE_CHARACTERS[f.role];
+                        const isSelected = activeFindingId === f.id;
+                        return (
+                          <div
+                            key={f.id}
+                            className={`adv-row${isSelected ? ' active' : ''}`}
+                            onClick={() => {
+                              setActiveFindingId(f.id);
+                              if (f.targetIds[0]) setSelected(f.targetIds[0]);
+                            }}
+                          >
+                            <div className="adv-meta">
+                              <span className="adv-dot" style={{ background: char.accent }} />
+                              <span className={`adv-sev ${f.severity}`}>{f.severity}</span>
+                              <span>· {char.name}</span>
+                              {f.targetIds.length > 0 && <span>· {f.targetIds.join(', ')}</span>}
+                              {f.decisionConfidence !== undefined && <span className="num">· {Math.round(f.decisionConfidence * 100)}% risk</span>}
+                            </div>
+                            <div className="adv-title">{f.title}</div>
+                            <div className="adv-evidence">{f.evidence}</div>
+                            <div className="adv-actions" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                className="ghost sm"
+                                onClick={() => {
+                                  setWalkthroughIdx(null);
+                                  hearFinding(f);
+                                }}
+                              >
+                                <Icon name="volume" size={13} /> Hear
+                              </button>
+                              <button className="ghost sm" disabled={busy} onClick={() => void requestFix([f])}>
+                                <Icon name="wrench" size={13} /> Preview fix
+                              </button>
+                              <span className="adv-hint">{f.metricDeltaHint}</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -579,21 +1039,25 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                     <div key={r.n} className="section round">
                       <header>
                         <b>Round {r.n}</b>
-                        <span className="muted small">{(r.ms / 1000).toFixed(0)} s</span>
+                        <span className="muted small">
+                          {r.advocateVerdict ? `gate: ${r.advocateVerdict} · ` : ''}
+                          {(r.ms / 1000).toFixed(0)} s
+                        </span>
                       </header>
                       {r.tried.map((t, i) => (
-                        <div key={i} className={`tried ${t.outcome === 'kept' ? 'kept' : t.outcome === 'rejected' ? 'rejected' : ''}`}>
+                        <div key={i} className={`tried ${t.outcome === 'kept' ? 'kept' : t.outcome === 'rejected' || t.outcome === 'vetoed' ? 'rejected' : ''}`}>
                           <Icon name={outcomeIcon[t.outcome]} size={14} />
                           <div>
                             <b>
                               {t.name}
-                              {t.outcome === 'kept' ? ' · kept' : ''}
+                              {t.outcome === 'kept' ? ' · kept' : t.outcome === 'vetoed' ? ' · vetoed' : ''}
                             </b>
                             <span>
                               {t.source === 'search' ? 'Search' : 'Neon'}
                               {t.gate !== undefined ? ` · pre-check ${Math.round(t.gate * 100)}%` : ''}
                               {t.outcome === 'gated out' ? ' · not simulated' : ''}
                               {t.outcome === 'rejected' ? ` · broke a rule: ${(t.errors ?? [])[0] ?? ''}` : ''}
+                              {t.outcome === 'vetoed' ? ` · Devil’s Advocate veto: ${(t.vetoReasons ?? []).join('; ')}` : ''}
                             </span>
                             {t.deltas && <DeltaLine d={t.deltas} />}
                           </div>
@@ -702,6 +1166,90 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
         )}
         {notice && !liveErrors.length && <Notice tone={notice.tone} title={notice.title} lines={notice.lines} onClose={() => setNotice(null)} />}
         <RunStatus state={run} />
+
+        {/* Live Speaker Bar for walking & speaking 3D floor characters */}
+        {speech && (
+          <div className="speaker-bar" role="status" aria-live="polite">
+            <div className="speaker-top">
+              <div className="speaker-who">
+                <span className="adv-dot" style={{ background: ADVOCATE_CHARACTERS[speech.role].accent }} />
+                <b>{ADVOCATE_CHARACTERS[speech.role].name}</b>
+                <span>
+                  {ADVOCATE_CHARACTERS[speech.role].shortTitle} · {speech.targetLabel}
+                  {speech.loading ? ' · synthesising voice…' : speech.playing ? ' · speaking' : ''}
+                </span>
+              </div>
+              <div className="speaker-controls">
+                {findings.length > 1 && (
+                  <button
+                    className="icon-btn"
+                    title="Previous inspector"
+                    aria-label="Previous inspector"
+                    onClick={() => {
+                      const curIdx = findings.findIndex((f) => f.id === speech.findingId);
+                      const prevIdx = curIdx <= 0 ? findings.length - 1 : curIdx - 1;
+                      if (walkthroughIdx !== null) startWalkthroughAt(prevIdx);
+                      else hearFinding(findings[prevIdx]);
+                    }}
+                  >
+                    <Icon name="prev" size={14} />
+                  </button>
+                )}
+                <button
+                  className="icon-btn"
+                  title={speech.playing ? 'Pause voice' : 'Replay voice'}
+                  aria-label={speech.playing ? 'Pause voice' : 'Replay voice'}
+                  onClick={() => {
+                    if (speech.playing && audioRef.current) {
+                      audioRef.current.pause();
+                      setSpeech((s) => (s ? { ...s, playing: false } : null));
+                    } else {
+                      void speakAs(speech.role, speech.text, speech.targetLabel, speech.findingId);
+                    }
+                  }}
+                >
+                  <Icon name={speech.playing ? 'pause' : 'play'} size={14} />
+                </button>
+                {findings.length > 1 && (
+                  <button
+                    className="icon-btn"
+                    title="Next inspector"
+                    aria-label="Next inspector"
+                    onClick={() => {
+                      const curIdx = findings.findIndex((f) => f.id === speech.findingId);
+                      const nextIdx = (curIdx + 1) % findings.length;
+                      if (walkthroughIdx !== null) startWalkthroughAt(nextIdx);
+                      else hearFinding(findings[nextIdx]);
+                    }}
+                  >
+                    <Icon name="next" size={14} />
+                  </button>
+                )}
+                <button
+                  className="icon-btn"
+                  title={muted ? 'Unmute voice' : 'Mute voice'}
+                  aria-label={muted ? 'Unmute voice' : 'Mute voice'}
+                  onClick={() => {
+                    const nextMuted = !muted;
+                    setMuted(nextMuted);
+                    if (nextMuted && audioRef.current) {
+                      audioRef.current.pause();
+                      setSpeech((s) => (s ? { ...s, playing: false } : null));
+                    }
+                  }}
+                >
+                  <Icon name={muted ? 'volumeOff' : 'volume'} size={14} />
+                </button>
+                <button className="icon-btn" title="Close speaker bar" aria-label="Close speaker bar" onClick={stopWalkthrough}>
+                  <Icon name="x" size={14} />
+                </button>
+              </div>
+            </div>
+            <p className="speaker-line">“{speech.text}”</p>
+            {speech.error && <span className="speaker-err">{speech.error}</span>}
+          </div>
+        )}
+
         <form
           className="prompt"
           onSubmit={(e) => {

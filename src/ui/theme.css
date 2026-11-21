@@ -318,6 +318,47 @@ th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
 .prompt:focus-within { border-color: var(--accent); }
 .prompt .primary { padding: 8px; }
 
+/* Devil's Advocate ledger, Fixer preview, and Live Speaker Bar */
+.adv-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.adv-head h3 { font-family: var(--display); font-size: 15px; font-weight: 600; color: var(--ink); }
+.adv-verdict { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.adv-verdict.veto { color: var(--warn); }
+.adv-verdict.warn { color: var(--accent-ink); }
+.adv-verdict.pass { color: var(--good); }
+.adv-crew { display: flex; flex-wrap: wrap; gap: 4px; }
+.adv-crew-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.adv-crew-btn:hover { border-color: var(--line-2); color: var(--ink); }
+.adv-crew-btn.on { background: var(--dark); border-color: var(--dark); color: #f3eadb; }
+.adv-crew-btn em { font-style: normal; opacity: 0.72; font-variant-numeric: tabular-nums; }
+.adv-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; display: inline-block; }
+.adv-list { display: flex; flex-direction: column; }
+.adv-row { padding: 10px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; cursor: pointer; transition: background 0.12s; }
+.adv-row:first-child { border-top: 0; padding-top: 4px; }
+.adv-row.active { background: var(--accent-soft); margin: 0 -18px; padding: 10px 18px; }
+.adv-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.adv-sev { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; }
+.adv-sev.blocker { color: var(--warn); }
+.adv-sev.warning { color: var(--accent-ink); }
+.adv-sev.advisory { color: var(--muted); }
+.adv-title { font-weight: 600; color: var(--ink); font-size: 13.5px; line-height: 1.3; }
+.adv-evidence { color: var(--ink-2); font-size: 12.5px; line-height: 1.4; }
+.adv-actions { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.adv-hint { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.fix-preview { background: var(--accent-soft); border-bottom: 1px solid var(--line-2); }
+.fix-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fix-preview-head b { font-family: var(--display); font-size: 15px; display: inline-flex; align-items: center; gap: 7px; }
+.fix-ops { margin: 0; padding-left: 16px; color: var(--ink-2); font-size: 12.5px; display: flex; flex-direction: column; gap: 2px; }
+
+.speaker-bar { display: flex; flex-direction: column; gap: 6px; width: min(600px, 100%); background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px; padding: 10px 12px; box-shadow: var(--float); }
+.speaker-top { display: flex; align-items: center; gap: 8px; }
+.speaker-who { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; }
+.speaker-who b { font-family: var(--display); font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.speaker-who span { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.speaker-controls { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.speaker-line { color: var(--ink); font-size: 13.5px; line-height: 1.42; }
+.speaker-err { color: var(--warn); font-size: 12px; }
+
 @media (max-width: 900px) {
   /* simulation: floor on top, then the prompt, then the panel, all in one scroll */
   .workspace { height: auto; min-height: 100vh; overflow: visible; display: flex; flex-direction: column; }

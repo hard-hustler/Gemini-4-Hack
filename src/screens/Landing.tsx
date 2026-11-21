@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { pickItem } from '../catalog';
 import type { EquipmentLine, ProcessStep, Requirements } from '../contracts';
+import { runDeterministicAdvocateAudit } from '../engines/advocate';
 import { buildLayout } from '../engines/place';
 import { evaluate, makeVersion } from '../engines/versions';
 import { money, num, type Project } from '../store';
@@ -38,8 +39,9 @@ export function Landing({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }
   const hero = useMemo(() => {
     const p = demoProject();
     const spec = p.versions[0].spec;
-    const ev = evaluate(spec, 4);
-    return { spec, routes: ev.ok ? ev.routes : null, metrics: p.versions[0].metrics };
+    const ev = evaluate(spec, 6);
+    const audit = ev.ok ? runDeterministicAdvocateAudit(spec, ev.metrics, ev.routes, p.requirements) : null;
+    return { spec, routes: ev.ok ? ev.routes : null, metrics: p.versions[0].metrics, audit };
   }, []);
 
   return (
@@ -64,7 +66,9 @@ export function Landing({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }
         <section className="hero">
           <div className="hero-copy">
             <h1>Test the factory before you build it.</h1>
-            <p>Describe the line, or photograph a sketch of the floor. Dry Run picks the equipment, lays it out and simulates it, so you can compare layouts on throughput and cost before you buy anything.</p>
+            <p>
+              Describe the line or upload a sketch. Dry Run lays out and simulates the floor, sends 5 devil’s advocate inspectors walking the aisles to challenge bottlenecks, safety, CapEx, compliance and maintenance, and previews verified surgical fixes.
+            </p>
             <div className="row">
               <button className="primary lg" onClick={onNew}>
                 Start a project
@@ -76,10 +80,16 @@ export function Landing({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }
           </div>
           <figure>
             <div className="hero-stage">
-              <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false }} interactive={false} />
+              <Scene
+                spec={hero.spec}
+                routes={hero.routes}
+                walkPlans={hero.audit?.walkPlans ?? []}
+                layers={{ flow: true, routes: false, power: false, water: false, labels: false, crew: true }}
+                interactive={false}
+              />
             </div>
             <figcaption>
-              The demo floor, simulated live in your browser: {num(hero.metrics.sim.unitsPerHour.median)} units an hour at {money(hero.metrics.cost.costPerUnit)} a unit.
+              Live demo floor: {num(hero.metrics.sim.unitsPerHour.median)} units/hr at {money(hero.metrics.cost.costPerUnit)}/unit · 5 devil’s advocate inspectors walking the aisles ({hero.audit?.findings.length ?? 0} live critiques).
             </figcaption>
           </figure>
         </section>
