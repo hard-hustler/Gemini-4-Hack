@@ -1,5 +1,8 @@
 // Small Node proxy for model calls. The key stays server-side in GEMINI_API_KEY.
 import express, { type Request, type Response } from 'express';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AdvocateFinding, Emit, Requirements } from '../src/contracts';
 import type { FactorySpec } from '../src/spec';
 import { GeminiError, MODELS, type Block } from './gemini';
@@ -222,6 +225,18 @@ app.post(
     revise(listing, step, model, render, problems, emit),
   ),
 );
+
+// Dev helper: save a generated project or a render into public/, so it ships as a demo.
+// Only writes .json and .jpg/.png files under public/demos and public/img.
+app.post('/api/dev/save', (req, res) => {
+  const { dir, name, text, base64 } = req.body as { dir: string; name: string; text?: string; base64?: string };
+  if (!['demos', 'img'].includes(dir) || !/^[a-z0-9-]+\.(json|jpg|png)$/.test(name ?? '')) return void res.status(400).json({ error: 'dir must be demos or img, name like car-plant.json' });
+  const file = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', dir, name);
+  mkdirSync(dirname(file), { recursive: true });
+  if (base64) writeFileSync(file, Buffer.from(base64, 'base64'));
+  else writeFileSync(file, text ?? '');
+  res.json({ ok: true, file: `public/${dir}/${name}` });
+});
 
 const port = Number(process.env.PORT ?? 8787);
 app.listen(port, () => console.log(`api on http://localhost:${port} (key ${process.env.GEMINI_API_KEY ? 'set' : 'MISSING'})`));

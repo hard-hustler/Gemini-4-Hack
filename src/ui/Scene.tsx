@@ -432,6 +432,9 @@ function World({
   );
 }
 
+/** ?capture in the URL keeps the drawing buffer so a frame can be saved as an image. */
+const CAPTURE = typeof location !== 'undefined' && new URLSearchParams(location.search).has('capture');
+
 export function Scene(props: SceneProps) {
   useEffect(() => {
     const t = setTimeout(() => window.dispatchEvent(new Event('resize')), 80);
@@ -444,7 +447,7 @@ export function Scene(props: SceneProps) {
       orthographic
       camera={{ position: [40, 50, 40], zoom: 30, near: -200, far: 600 }}
       dpr={[1, 2]}
-      gl={{ antialias: true, alpha: true }}
+      gl={{ antialias: true, alpha: true, preserveDrawingBuffer: CAPTURE }}
       onCreated={({ gl }) => {
         gl.domElement.addEventListener('webglcontextlost', (e) => e.preventDefault(), false);
       }}

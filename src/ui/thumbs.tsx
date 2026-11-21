@@ -115,3 +115,8 @@ export function MachineThumb({ item }: { item: CatalogItem }) {
     </span>
   );
 }
+
+// ?capture: let a script on the page ask for renders, to save pictures of machines for the site
+if (typeof window !== 'undefined' && new URLSearchParams(location.search).has('capture')) {
+  (window as unknown as { __renderModel: typeof renderModel }).__renderModel = renderModel;
+}

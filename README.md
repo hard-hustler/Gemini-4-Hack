@@ -81,6 +81,21 @@ sized as a plant, researched, planned as 20 steps in 5 departments (60
 stations, 180 x 120 m), every machine designed by the swarm (54 to 101 parts
 each), simulated at 27.9 cars an hour against 30.
 
+## Demos
+
+Projects the harness generated are saved in `public/demos/` and listed in
+`src/demos.ts`; the Demos screen opens any of them as a copy, with no key
+needed: the electric car plant, an espresso grinder workshop equipped from
+real Shop listings, and the built-in light assembly floor. To add one, open a
+project with `?capture` in the URL and post it to `/api/dev/save` (a dev-only
+endpoint that writes under `public/demos` and `public/img`). The images on the
+landing page were captured the same way; all are renders of the harness's own
+output.
+
+On a plant the improve loop adds capacity with a `clone` op: a model names a
+station to duplicate and code finds where the copy can legally stand. Tested
+on the car plant: three rounds in 85 s, two changes kept, demand met.
+
 ## Machine catalog
 
 A machine is a recipe, not a mesh (`src/machines.ts`): one of 12 archetypes
@@ -191,7 +206,7 @@ Where it breaks, and what the numbers do not show:
 - Designing 20 plant machines took 7.5 minutes in the one full run; the limit was
   since lowered to two inspection rounds and eight agents at once, untested at that size.
 - On a plant, research sometimes returns notes with no cited sources.
-- The improve loop has not been tried on a plant; its seeded search skips large floors.
+- On a plant the improve loop was tested through the API on a 43-station layout, not through the UI.
 - An improve run takes about two minutes (three rounds, 30 to 40 s per Neon call).
 - The microphone path was tested in the browser with a synthetic audio stream, not a physical mic.
 - The sim charges forklift time only for loaded travel, and aisle width is not

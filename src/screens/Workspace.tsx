@@ -232,6 +232,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const run = useRun();
   const busy = run.busy;
   const narrow = useNarrow();
+  // ?capture: the floor alone, centred, for saving a clean picture of it
+  const capture = new URLSearchParams(location.search).has('capture');
 
   useEffect(() => {
     setDraft(current.spec);
@@ -639,7 +641,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const totalOpenFindings = findings.filter((f) => f.severity !== 'advisory').length;
 
   return (
-    <div className="page workspace">
+    <div className={`page workspace${capture ? ' capture' : ''}`}>
       <TopBar
         onHome={onHome}
         log={project.trace}
@@ -663,7 +665,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           walkPlans={activeAudit?.walkPlans ?? []}
           activeRole={activeRole}
           speakingRole={speakingRole}
-          insetRight={narrow ? 0 : PANEL + 14}
+          insetRight={narrow || capture ? 0 : PANEL + 14}
           onSelect={setSelected}
           onSelectCharacter={handleSelectCharacter}
           onDrag={onDrag}

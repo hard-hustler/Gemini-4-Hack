@@ -383,3 +383,19 @@ th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
   .project-row span { display: none; }
   .compare-views { grid-template-columns: 1fr; }
 }
+
+/* demo cards: used by the gallery and the landing page */
+.demo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; margin-top: 8px; }
+.demo-card { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0; padding: 0; text-align: left; white-space: normal; background: var(--surface); border: 1px solid var(--ink); border-radius: 0; overflow: hidden; transition: transform 0.25s, box-shadow 0.25s; }
+.demo-card:hover:not(:disabled) { transform: translate(-3px, -3px); box-shadow: 8px 8px 0 rgba(38, 40, 42, 0.14); }
+.demo-img { position: relative; display: block; aspect-ratio: 16 / 10; overflow: hidden; background: var(--stage); border-bottom: 1px solid var(--ink); }
+.demo-img img { width: 100%; height: 100%; object-fit: cover; transform: scale(1.35); transition: transform 0.8s cubic-bezier(0.2, 0.7, 0.2, 1); display: block; }
+.demo-card:hover .demo-img img { transform: scale(1.5); }
+.demo-scale { position: absolute; left: 0; top: 0; background: var(--ink); color: #fff8ea; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; padding: 6px 10px; }
+.demo-body { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px 18px; }
+.demo-body b { font-family: var(--display); font-size: 22px; font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; }
+.demo-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+.demo-open { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--accent-ink); margin-top: 2px; }
+
+/* capture mode: nothing but the floor */
+.workspace.capture > :not(.stage) { display: none !important; }

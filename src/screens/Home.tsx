@@ -1,9 +1,10 @@
-// The landing page. Structure borrowed from the best engineering-software sites: one claim,
-// the problem, what it does in numbered steps, proof with real numbers, then the ask.
-import { useEffect, useMemo, useState } from 'react';
+// The landing page, built as a pitch: show the thing, say little. Every picture on it is a
+// render of something the harness itself produced; none are stock or mock-ups.
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { DEMOS, type Demo } from '../demos';
 import { runDeterministicAdvocateAudit } from '../engines/advocate';
 import { evaluate } from '../engines/versions';
-import { money, num, type Project } from '../store';
+import { num, type Project } from '../store';
 import '../ui/home.css';
 import { Icon } from '../ui/icons';
 import { Scene } from '../ui/Scene';
@@ -11,33 +12,183 @@ import { demoProject } from './Landing';
 
 interface EvalResults {
   validity?: { oneCallValidShare: number; placerValidShare: number; n: number };
-  qap?: { instance: string; oneCall?: { gapPct?: number }; harness?: { gapPct?: number } }[];
+  qap?: { oneCall?: { gapPct?: number }; harness?: { gapPct?: number } }[];
   queue?: { errorPct: number }[];
 }
 
-const STEPS = [
-  ['Turn a brief into a plan.', 'A prompt, a photo of a floor sketch, a PDF or a voice note is read into process steps and equipment. Anything it had to assume is listed for you to correct.'],
-  ['Research what you did not say.', 'A large project is researched on the web first, so a car plant is planned the way car plants are built: stamping, body, paint, assembly, inspection.'],
-  ['Build the machines.', 'A swarm of agents, one per step, finds real listings or designs the equipment part by part. Code checks each model holds together and an inspector judges every render.'],
-  ['Simulate, then improve.', 'Thirty shifts are simulated. An agent proposes changes toward your goal, and a change is kept only if the simulator says it beats the layout you have.'],
+const BRIEF = 'Plan a car assembly plant that builds 30 compact electric cars an hour, from steel coils to cars driving off the line.';
+
+const MACHINES: [file: string, name: string, parts: number][] = [
+  ['drawing', 'Deep drawing press', 59],
+  ['underbody', 'Underbody welding cell', 83],
+  ['ecoat', 'E-coat dip tank', 87],
+  ['spraybooth', 'Primer and coat booth', 93],
+  ['marriage', 'Battery and motor marriage', 74],
+  ['curingoven', 'Paint curing oven', 64],
+  ['coilblanking', 'Coil blanking line', 101],
+  ['bodyside', 'Body-side framing cell', 82],
+  ['trimline', 'Trim line', 88],
+  ['chassisdyno', 'Chassis dyno', 55],
+  ['flanging', 'Flanging and hemming press', 99],
+  ['closurehang', 'Closure hanging cell', 80],
+  ['seamseal', 'Seam sealing cell', 74],
+  ['watertest', 'Water-leak test booth', 61],
+  ['alignment', 'Wheel alignment', 59],
+  ['visualcheck', 'Inspection tunnel', 79],
 ];
 
-const STACK = [
-  ['gemini-4-hydrogen', 'Reads the brief, researches the process, edits by voice, and models each machine.'],
-  ['gemini-4-neon', 'Proposes layout changes, round after round, learning from what the simulator said.'],
-  ['gemini-decision-1', 'The independent checker: is this step in the brief, does this render match the photo, is this change worth simulating.'],
-  ['Managed agent', 'Clones the repo into a sandbox and runs the layout search eight ways at once.'],
+const STEPS: { title: string; line: string }[] = [
+  { title: 'Brief', line: 'A sentence, a sketch photo, a PDF or a voice note.' },
+  { title: 'Research', line: 'Big projects are researched on the web before anything is planned.' },
+  { title: 'Plan', line: 'Departments, steps and station counts, checked against what you asked for.' },
+  { title: 'Build', line: 'One agent per machine. Code checks it holds together; an inspector checks the render.' },
+  { title: 'Simulate', line: 'A layout that passes every rule, run for thirty shifts.' },
+  { title: 'Improve', line: 'Agents propose changes and inspectors walk the floor. Only what wins in simulation is kept.' },
 ];
 
-export function Home({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: { projects: Project[]; onNew: () => void; onCatalog: () => void; onOpen: (p: Project) => void; onDemo: () => void; onDelete: (id: string) => void }) {
-  const hero = useMemo(() => {
-    const p = demoProject();
-    const spec = p.versions[0].spec;
-    const ev = evaluate(spec, 4);
-    const routes = ev.ok ? ev.routes : null;
-    const walkPlans = routes ? runDeterministicAdvocateAudit(spec, p.versions[0].metrics, routes).walkPlans : [];
-    return { spec, routes, metrics: p.versions[0].metrics, walkPlans };
-  }, []);
+/** Adds .in to anything with .reveal once it scrolls into view. */
+function useReveal() {
+  useEffect(() => {
+    const els = [...document.querySelectorAll('.home .reveal')];
+    if (!('IntersectionObserver' in window)) return void els.forEach((el) => el.classList.add('in'));
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            e.target.classList.add('in');
+            io.unobserve(e.target);
+          }
+        }
+      },
+      { threshold: 0.18 },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  });
+}
+
+function useInView<T extends Element>() {
+  const ref = useRef<T>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || seen) return;
+    const io = new IntersectionObserver(([e]) => e.isIntersecting && setSeen(true), { threshold: 0.3 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen]);
+  return [ref, seen] as const;
+}
+
+/** A number that counts up the first time it is seen. */
+function Count({ to, digits = 0, suffix = '' }: { to: number; digits?: number; suffix?: string }) {
+  const [ref, seen] = useInView<HTMLElement>();
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    if (!seen) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return void setV(to);
+    const t0 = performance.now();
+    let raf = 0;
+    const tick = (t: number) => {
+      const k = Math.min(1, (t - t0) / 1100);
+      setV(to * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [seen, to]);
+  return (
+    <b ref={ref}>
+      {v.toFixed(digits)}
+      {suffix}
+    </b>
+  );
+}
+
+/** Types the brief out once it is on screen. */
+function Typed({ text }: { text: string }) {
+  const [ref, seen] = useInView<HTMLParagraphElement>();
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    if (!seen) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return void setN(text.length);
+    const t = setInterval(() => setN((c) => (c >= text.length ? (clearInterval(t), c) : c + 2)), 28);
+    return () => clearInterval(t);
+  }, [seen, text]);
+  return (
+    <p ref={ref} className="typed" aria-label={text}>
+      {text.slice(0, n)}
+      <i className={n >= text.length ? 'caret done' : 'caret'} />
+    </p>
+  );
+}
+
+function StepVisual({ i }: { i: number }) {
+  switch (i) {
+    case 0:
+      return <img className="how-img" src="/sample-sketch.png" alt="A hand-drawn floor sketch" />;
+    case 1:
+      return (
+        <div className="how-search">
+          {['automotive stamping press line cycle time footprint', 'body shop welding robot cell footprint power kW', 'automotive paint shop cycle time footprint', 'EV assembly plant floor area, 30 jobs per hour'].map((q, k) => (
+            <span key={q} style={{ animationDelay: `${k * 0.22}s` }}>
+              <Icon name="arrowRight" size={14} /> {q}
+            </span>
+          ))}
+        </div>
+      );
+    case 2:
+      return (
+        <div className="how-zones">
+          {['Stamping', 'Body shop', 'Paint shop', 'General assembly', 'Final inspection'].map((z, k) => (
+            <span key={z} style={{ animationDelay: `${k * 0.16}s` }}>
+              <em>{String(k + 1).padStart(2, '0')}</em>
+              {z}
+            </span>
+          ))}
+        </div>
+      );
+    case 3:
+      return (
+        <div className="how-grid">
+          {MACHINES.slice(0, 6).map(([f, name], k) => (
+            <img key={f} src={`/img/machine-${f}.png`} alt={name} style={{ animationDelay: `${k * 0.12}s` }} />
+          ))}
+        </div>
+      );
+    case 4:
+      return <img className="how-img pan" src="/img/car-plant-close.jpg" alt="Close view of the paint shop with conveyors" />;
+    default:
+      return <img className="how-img" src="/img/espresso-workshop.jpg" alt="A workshop floor with inspectors walking it" />;
+  }
+}
+
+export function Home({
+  projects,
+  onNew,
+  onCatalog,
+  onOpen,
+  onDemos,
+  onOpenDemo,
+  onDelete,
+}: {
+  projects: Project[];
+  onNew: () => void;
+  onCatalog: () => void;
+  onOpen: (p: Project) => void;
+  onDemos: () => void;
+  onOpenDemo: (d: Demo) => void;
+  onDelete: (id: string) => void;
+}) {
+  useReveal();
+  const [step, setStep] = useState(0);
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (held || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const t = setInterval(() => setStep((s) => (s + 1) % STEPS.length), 3600);
+    return () => clearInterval(t);
+  }, [held]);
+
   const [results, setResults] = useState<EvalResults | null>(null);
   useEffect(() => {
     fetch('/eval/results.json')
@@ -45,35 +196,38 @@ export function Home({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: {
       .then(setResults)
       .catch(() => setResults(null));
   }, []);
-
   const worstOneCall = results?.qap?.length ? Math.max(...results.qap.map((q) => q.oneCall?.gapPct ?? 0)) : null;
   const worstHarness = results?.qap?.length ? Math.max(...results.qap.map((q) => q.harness?.gapPct ?? 0)) : null;
   const worstQueue = results?.queue?.length ? Math.max(...results.queue.map((q) => Math.abs(q.errorPct))) : null;
 
+  // one floor runs live, in the page: the inspectors walking it are computed, not filmed
+  const [liveRef, liveSeen] = useInView<HTMLDivElement>();
+  const live = useMemo(() => {
+    if (!liveSeen) return null;
+    const p = demoProject();
+    const spec = p.versions[0].spec;
+    const ev = evaluate(spec, 4);
+    const routes = ev.ok ? ev.routes : null;
+    const walkPlans = routes ? runDeterministicAdvocateAudit(spec, p.versions[0].metrics, routes).walkPlans : [];
+    return { spec, routes, walkPlans, uph: p.versions[0].metrics.sim.unitsPerHour.median };
+  }, [liveSeen]);
+
   return (
     <div className="home">
-      <div className="home-strip">
-        <span className="mono">Built at the Gemini 4 hackathon</span>
-        <span>Every number on this page comes from a run you can repeat.</span>
-        <a href="/eval/index.html" target="_blank" rel="noreferrer">
-          See the eval <Icon name="arrowRight" size={14} />
-        </a>
-      </div>
-
       <header className="home-nav">
         <span className="wordmark">
           dry run<i>.</i>
         </span>
         <nav>
+          <button className="home-link" onClick={onDemos}>
+            Demos
+          </button>
           <button className="home-link" onClick={onCatalog}>
             Catalog
           </button>
           <a className="home-link" href="/eval/index.html" target="_blank" rel="noreferrer">
             Eval
           </a>
-          <button className="btn-line" onClick={onDemo}>
-            Open the demo
-          </button>
           <button className="btn-ink" onClick={onNew}>
             Start a project
           </button>
@@ -83,128 +237,207 @@ export function Home({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: {
       <section className="home-hero">
         <div className="home-hero-copy">
           <span className="mono tag">
-            <i className="dot" /> Factory planning, simulated before it is built
+            <i className="dot" /> Factory planning, simulated
           </span>
           <h1>
-            Test the factory
+            Test the
             <br />
-            before you
+            factory before
             <br />
-            build it.
+            you build it.
           </h1>
-          <div className="home-hero-foot">
-            <p>Describe the line or photograph a sketch. Dry Run plans it, builds the machines, and simulates it.</p>
-            <div className="home-cta">
-              <button className="btn-ink lg" onClick={onNew}>
-                Start a project <Icon name="arrowRight" />
-              </button>
-              <button className="btn-line lg" onClick={onDemo}>
-                Open the demo floor
-              </button>
-            </div>
+          <p>Describe a factory. Agents plan it, build every machine and simulate it, before you spend a dollar.</p>
+          <div className="home-cta">
+            <button className="btn-ink lg" onClick={onNew}>
+              Start a project <Icon name="arrowRight" />
+            </button>
+            <button className="btn-line lg" onClick={onDemos}>
+              See the demos
+            </button>
           </div>
         </div>
-        <div className="home-hero-art" aria-hidden="true">
-          <figure className="shard a">
-            <div className="shard-clip">
-              <img src="/sample-sketch.png" alt="" />
-            </div>
-            <figcaption className="mono">The sketch</figcaption>
+        <div className="home-hero-art">
+          <div className="hero-frame">
+            <img src="/img/car-plant-close.jpg" alt="A simulated car plant: paint ovens linked by conveyors" />
+          </div>
+          <figure className="hero-chip a">
+            <img src="/img/machine-underbody.png" alt="" />
+            <figcaption>
+              <b>Welding cell</b>
+              <span className="mono">83 parts · agent-built</span>
+            </figcaption>
           </figure>
-          <figure className="shard b">
-            <div className="shard-clip live">
-              <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false, crew: true }} walkPlans={hero.walkPlans} interactive={false} />
-            </div>
-            <figcaption className="mono">The simulation, live</figcaption>
+          <figure className="hero-chip b">
+            <img src="/img/machine-drawing.png" alt="" />
+            <figcaption>
+              <b>Drawing press</b>
+              <span className="mono">59 parts · 11 moving</span>
+            </figcaption>
           </figure>
+          <span className="hero-caption mono">Not a mock-up. A plant the harness built from one sentence.</span>
         </div>
       </section>
 
-      <section className="home-band">
-        <span className="mono num">01 · The problem</span>
-        <h2>
-          A layout mistake is cheap on paper
-          <br />
-          and expensive in concrete.
-        </h2>
-        <p>
-          Where the benches, the racks and the docks go decides how far every unit travels, where work piles up, and what each unit costs. Most floors are settled on a whiteboard and tested only once the equipment is bolted down.
-        </p>
+      <section className="home-one">
+        <span className="mono num reveal">One sentence in</span>
+        <h2 className="reveal">A car plant out.</h2>
+        <div className="one-grid">
+          <div className="one-brief reveal">
+            <span className="mono">The whole brief</span>
+            <Typed text={BRIEF} />
+          </div>
+          <div className="one-arrow reveal" aria-hidden="true">
+            <Icon name="arrowRight" size={28} />
+          </div>
+          <button className="one-result reveal" onClick={() => onOpenDemo(DEMOS[0])} title="Open this plant">
+            <img src="/img/car-plant.jpg" alt="The whole plant: five departments and sixty stations" />
+            <span className="mono">
+              Open this plant <Icon name="arrowRight" size={14} />
+            </span>
+          </button>
+        </div>
+        <div className="one-stats reveal">
+          <div>
+            <Count to={60} />
+            <span>stations placed</span>
+          </div>
+          <div>
+            <Count to={20} />
+            <span>machines designed by agents</span>
+          </div>
+          <div>
+            <Count to={5} />
+            <span>departments, from research</span>
+          </div>
+          <div>
+            <Count to={27.9} digits={1} />
+            <span>cars an hour, against 30 asked</span>
+          </div>
+        </div>
       </section>
 
-      <section className="home-does">
-        <span className="mono num">02 · What it does</span>
-        <div className="home-does-grid">
-          <ol>
-            {STEPS.map(([title, text], i) => (
-              <li key={title}>
-                <span className="mono">{String(i + 1).padStart(2, '0')}</span>
-                <div>
-                  <h3>{title}</h3>
-                  <p>{text}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
-          <div className="home-screen">
-            <div className="home-screen-bar mono">
-              <span>demo floor</span>
-              <span>
-                {num(hero.metrics.sim.unitsPerHour.median)} units / h · {money(hero.metrics.cost.costPerUnit)} a unit
-              </span>
-            </div>
-            <div className="home-screen-view">
-              <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: true, crew: true }} walkPlans={hero.walkPlans} interactive={false} />
+      <section className="home-how" onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)}>
+        <span className="mono num reveal">How it works</span>
+        <div className="how-rail reveal" role="tablist" aria-label="Steps">
+          {STEPS.map((s, i) => (
+            <button key={s.title} role="tab" aria-selected={step === i} className={step === i ? 'on' : i < step ? 'done' : ''} onClick={() => setStep(i)}>
+              <span className="mono">{String(i + 1).padStart(2, '0')}</span>
+              {s.title}
+              {step === i && !held && <i className="how-timer" />}
+            </button>
+          ))}
+        </div>
+        <div className="how-stage reveal">
+          <div className="how-copy" key={`c${step}`}>
+            <h3>{STEPS[step].title}</h3>
+            <p>{STEPS[step].line}</p>
+          </div>
+          <div className="how-visual" key={`v${step}`}>
+            <StepVisual i={step} />
+          </div>
+        </div>
+      </section>
+
+      <section className="home-wall">
+        <div className="wall-head">
+          <span className="mono num reveal">The machines</span>
+          <h2 className="reveal">
+            Each one designed,
+            <br />
+            checked and inspected.
+          </h2>
+        </div>
+        {[MACHINES.slice(0, 8), MACHINES.slice(8)].map((row, r) => (
+          <div key={r} className={`marquee${r ? ' back' : ''}`} aria-hidden={r > 0}>
+            <div className="marquee-track">
+              {[...row, ...row].map(([f, name, parts], k) => (
+                <figure key={k}>
+                  <img src={`/img/machine-${f}.png`} alt={k < row.length ? name : ''} loading="lazy" />
+                  <figcaption>
+                    <b>{name}</b>
+                    <span className="mono">{parts} parts</span>
+                  </figcaption>
+                </figure>
+              ))}
             </div>
           </div>
+        ))}
+      </section>
+
+      <section className="home-live">
+        <div className="live-copy">
+          <span className="mono num reveal">Running now, in this page</span>
+          <h2 className="reveal">Then it gets argued with.</h2>
+          <p className="reveal">Five inspectors walk the finished floor and challenge it: bottlenecks, safety, cost, compliance, maintenance.</p>
+        </div>
+        <div className="live-view reveal" ref={liveRef}>
+          {live && <Scene spec={live.spec} routes={live.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false, crew: true }} walkPlans={live.walkPlans} interactive={false} />}
+          {live && <span className="mono live-tag">Live · {num(live.uph)} units an hour</span>}
         </div>
       </section>
 
       <section className="home-proof">
-        <span className="mono num">03 · Proof</span>
-        <h2>
+        <span className="mono num reveal">Why believe it</span>
+        <h2 className="reveal">
           The model proposes.
           <br />
           The simulator decides.
         </h2>
-        <p>
-          Models read, research, design and suggest. Code decides what is real: a layout must pass every rule, a machine must hold together, and a change must win in simulation before you ever see it.
-        </p>
         {results && (
-          <div className="home-stats">
+          <div className="home-stats reveal">
             {results.validity && (
               <div>
-                <b>{Math.round(results.validity.placerValidShare * 100)}%</b>
-                <span>of layouts valid with the harness, against {Math.round(results.validity.oneCallValidShare * 100)}% from one model call, on {results.validity.n} unseen briefs</span>
+                <Count to={Math.round(results.validity.placerValidShare * 100)} suffix="%" />
+                <span>
+                  of layouts valid, against {Math.round(results.validity.oneCallValidShare * 100)}% from a single model call
+                </span>
               </div>
             )}
             {worstHarness !== null && worstOneCall !== null && (
               <div>
-                <b>{num(worstHarness)}%</b>
-                <span>worst gap to the best-known layout on four public benchmark problems, against {num(worstOneCall)}% for one model call</span>
+                <Count to={worstHarness} digits={1} suffix="%" />
+                <span>from the best-known answer on public layout benchmarks, against {num(worstOneCall)}% for one call</span>
               </div>
             )}
             {worstQueue !== null && (
               <div>
-                <b>{num(worstQueue)}%</b>
-                <span>largest error of the simulator against textbook queueing theory, across four test cases</span>
+                <Count to={worstQueue} digits={1} suffix="%" />
+                <span>largest gap between the simulator and textbook queueing theory</span>
               </div>
             )}
           </div>
         )}
-        <a className="btn-line" href="/eval/index.html" target="_blank" rel="noreferrer">
+        <a className="btn-line reveal" href="/eval/index.html" target="_blank" rel="noreferrer">
           Read where it breaks <Icon name="arrowRight" size={14} />
         </a>
       </section>
 
-      <section className="home-stack">
-        <span className="mono num">04 · What runs it</span>
-        <div className="home-stack-rows">
-          {STACK.map(([name, job]) => (
-            <div key={name}>
-              <span className="mono">{name}</span>
-              <p>{job}</p>
-            </div>
+      <section className="home-demos">
+        <div className="demos-head">
+          <div>
+            <span className="mono num reveal">Open one</span>
+            <h2 className="reveal">Built by the harness.</h2>
+          </div>
+          <button className="btn-line reveal" onClick={onDemos}>
+            All demos <Icon name="arrowRight" size={14} />
+          </button>
+        </div>
+        <div className="demo-grid">
+          {DEMOS.map((d, k) => (
+            <button key={d.id} className="demo-card reveal" style={{ transitionDelay: `${k * 0.08}s` }} onClick={() => onOpenDemo(d)}>
+              <span className="demo-img">
+                <img src={d.image} alt="" loading="lazy" />
+                <span className="demo-scale">{d.scale}</span>
+              </span>
+              <span className="demo-body">
+                <b>{d.name}</b>
+                <span className="demo-stats">
+                  {d.stats.slice(0, 3).map((s) => (
+                    <span key={s}>{s}</span>
+                  ))}
+                </span>
+              </span>
+            </button>
           ))}
         </div>
       </section>
@@ -234,17 +467,17 @@ export function Home({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: {
       )}
 
       <section className="home-close">
-        <h2>
-          Bring one real floor.
+        <h2 className="reveal">
+          Bring one
           <br />
-          We will lay it out with you.
+          real floor.
         </h2>
-        <div className="home-cta">
+        <div className="home-cta reveal">
           <button className="btn-ink lg" onClick={onNew}>
             Start a project <Icon name="arrowRight" />
           </button>
-          <button className="btn-line lg" onClick={onDemo}>
-            Open the demo floor
+          <button className="btn-line lg" onClick={onDemos}>
+            See the demos
           </button>
         </div>
       </section>
@@ -253,7 +486,7 @@ export function Home({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: {
         <span>
           dry run<i>.</i>
         </span>
-        <span>TypeScript · react-three-fiber · Gemini 4</span>
+        <span>Gemini 4 Hydrogen · Neon · Decisions API · Managed Agents · Shop</span>
       </footer>
     </div>
   );

@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
+import { loadDemo } from './demos';
 import { Catalog } from './screens/Catalog';
+import { Demos } from './screens/Demos';
 import { Home } from './screens/Home';
-import { demoProject } from './screens/Landing';
 import { NewProject } from './screens/NewProject';
 import { PlanReview } from './screens/PlanReview';
 import { Workspace } from './screens/Workspace';
 import { loadProjects, saveProjects, type Project } from './store';
 import { ThumbRenderer } from './ui/thumbs';
 
-type Route = { name: 'landing' } | { name: 'new' } | { name: 'catalog' } | { name: 'plan' | 'sim'; id: string };
+type Route = { name: 'landing' } | { name: 'new' } | { name: 'catalog' } | { name: 'demos' } | { name: 'plan' | 'sim'; id: string };
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>(loadProjects);
@@ -26,6 +27,7 @@ export default function App() {
   let screen;
   if (route.name === 'new') screen = <NewProject onHome={home} onCreated={(p) => add(p, 'plan')} />;
   else if (route.name === 'catalog') screen = <Catalog onHome={home} />;
+  else if (route.name === 'demos') screen = <Demos onHome={home} onOpen={(p) => add(p, 'sim')} />;
   else if (route.name === 'plan' && project) {
     screen = (
       <PlanReview
@@ -48,7 +50,8 @@ export default function App() {
         onNew={() => setRoute({ name: 'new' })}
         onCatalog={() => setRoute({ name: 'catalog' })}
         onOpen={(p) => setRoute({ name: p.versions.length ? 'sim' : 'plan', id: p.id })}
-        onDemo={() => add(demoProject(), 'sim')}
+        onDemos={() => setRoute({ name: 'demos' })}
+        onOpenDemo={(d) => void loadDemo(d).then((p) => add(p, 'sim'))}
         onDelete={(id) => setProjects((cur) => cur.filter((p) => p.id !== id))}
       />
     );
