@@ -29,6 +29,24 @@ async function api<T>(path: string, body: unknown): Promise<T> {
   return json as T;
 }
 
+interface Candidate {
+  name: string;
+  reason: string;
+  ops: EditOp[];
+  status: 'evaluated' | 'invalid' | 'gated_out';
+  errors?: string[];
+  gate?: number;
+  repaired?: boolean;
+  spec?: FactorySpec;
+  score?: number;
+  deltas?: { uph: number; leadMin: number; costPerUnit: number; buildCost: number; forkliftM: number };
+}
+interface Proposal {
+  explanation: string;
+  candidates: Candidate[];
+  stats: { proposed: number; firstPassValid: number; validAfterRepair: number; gateError?: string; ms: { propose: number; repair: number; gate: number; simulate: number; total: number } };
+}
+
 const describeOp = (op: EditOp): string => {
   switch (op.op) {
     case 'move':
@@ -157,6 +175,7 @@ export default function App() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confidence, setConfidence] = useState<Record<string, Confidence>>({});
   const [command, setCommand] = useState('');
+  const [proposal, setProposal] = useState<Proposal | null>(null);
   const [recording, setRecording] = useState(false);
   const recorder = useRef<Recorder | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -215,6 +234,21 @@ export default function App() {
       setCommand('');
       setNotice({ tone: 'ok', title: `"${out.transcript}"`, lines: [...out.ops.map(describeOp), out.attempts.length > 1 ? `took ${out.attempts.length} attempts to validate` : ''].filter(Boolean) });
     });
+
+  /** Neon proposes, the server validates, gates and simulates; we only ever see validated candidates' specs. */
+  const improve = () =>
+    run('Neon is proposing improvements', async () => {
+      setProposal(await api<Proposal>('/api/optimise', { spec: draft }));
+    });
+
+  const applyCandidate = (c: Candidate) => {
+    if (!c.spec) return;
+    const errs = validate(c.spec);
+    if (errs.length) return void setRejected(errs);
+    setDraft(c.spec);
+    setRejected([]);
+    setNotice({ tone: 'ok', title: `Applied "${c.name}"`, lines: c.ops.map(describeOp) });
+  };
 
   const toggleMic = async () => {
     if (recording && recorder.current) {
@@ -303,6 +337,7 @@ export default function App() {
     setCmp(null);
     setConfidence({});
     setNotice(null);
+    setProposal(null);
   };
 
   const sim = metrics.sim;
@@ -378,6 +413,12 @@ export default function App() {
           </form>
         </div>
         <div className="group">
+          <span className="group-title">Improve</span>
+          <button className="primary" disabled={!!busy} onClick={() => void improve()}>
+            Improve with Neon
+          </button>
+        </div>
+        <div className="group">
           <span className="group-title">Layers</span>
           {(
             [
@@ -428,6 +469,46 @@ export default function App() {
           ))}
           {!preview && <button onClick={() => setRejected([])}>Dismiss</button>}
         </div>
+      )}
+
+      {proposal && (
+        <aside className="proposal">
+          <header>
+            <b>Neon's read</b>
+            <button onClick={() => setProposal(null)}>Close</button>
+          </header>
+          <p>{proposal.explanation}</p>
+          <span className="fine">
+            {proposal.stats.proposed} proposed · {proposal.stats.firstPassValid} valid first pass · {proposal.stats.validAfterRepair} valid after repair ·{' '}
+            {(proposal.stats.ms.total / 1000).toFixed(0)} s (gate {proposal.stats.ms.gate} ms)
+            {proposal.stats.gateError ? ` · gate failed: ${proposal.stats.gateError}` : ''}
+          </span>
+          {proposal.candidates.map((c, i) => (
+            <div key={i} className={`cand ${c.status}`}>
+              <div className="cand-head">
+                <b>{c.name}</b>
+                {c.gate !== undefined && <em title="Decisions API score before simulation">gate {Math.round(c.gate * 100)}%</em>}
+              </div>
+              <span>{c.reason}</span>
+              {c.deltas && (
+                <div className="deltas">
+                  <i className={c.deltas.leadMin < 0 ? 'good' : 'warn'}>{c.deltas.leadMin > 0 ? '+' : ''}{num(c.deltas.leadMin)} min lead</i>
+                  <i className={c.deltas.costPerUnit <= 0 ? 'good' : 'warn'}>{c.deltas.costPerUnit > 0 ? '+' : '-'}${num(Math.abs(c.deltas.costPerUnit), 2)}/unit</i>
+                  <i className={c.deltas.buildCost <= 0 ? 'good' : 'warn'}>{c.deltas.buildCost > 0 ? '+' : '-'}${num(Math.abs(c.deltas.buildCost), 0)} build</i>
+                  <i className={c.deltas.uph >= -0.3 ? '' : 'warn'}>{c.deltas.uph > 0 ? '+' : ''}{num(c.deltas.uph)} u/h</i>
+                </div>
+              )}
+              {c.status === 'invalid' && <span className="warn">Rejected by validate(): {(c.errors ?? []).slice(0, 2).join('; ')}</span>}
+              {c.status === 'gated_out' && <span className="fine">Gate ranked this below the cut; simulated anyway so you can audit the gate.</span>}
+              {c.repaired && <span className="fine">Repaired after a failed first attempt.</span>}
+              {c.spec && (
+                <button disabled={!!busy} onClick={() => applyCandidate(c)}>
+                  Apply to draft
+                </button>
+              )}
+            </div>
+          ))}
+        </aside>
       )}
 
       {(busy || notice) && (

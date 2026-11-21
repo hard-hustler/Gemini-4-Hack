@@ -19,7 +19,7 @@ test      | 2 x 1     | 90           | 1         | 2       | false      | 1200
 pack      | 2.5 x 1.5 | 70           | 1         | 0.5     | false      | 500
 Other types are allowed (lowercase, one word); pick sensible values.`;
 
-const GEOMETRY_RULES = `Coordinate system: metres. Origin is the north-west corner of the floor; x runs east (0..floor.width), y runs south (0..floor.depth). North is the top of a drawing.
+export const GEOMETRY_RULES = `Coordinate system: metres. Origin is the north-west corner of the floor; x runs east (0..floor.width), y runs south (0..floor.depth). North is the top of a drawing.
 A station's x,y is the north-west corner of its footprint; w is its east-west size and d its north-south size when rot is 0. rot 90 or 270 swaps them.
 All positions and sizes are multiples of ${CELL} m.
 Hard rules the layout must satisfy:
@@ -73,7 +73,7 @@ const planSchema = {
 };
 
 // Flat op object: unused fields are null. Simpler for the model than a union.
-const opsSchema = {
+export const opsSchema = {
   type: 'object',
   properties: {
     transcript: { type: 'string', description: 'what the user said or typed, verbatim' },
@@ -126,7 +126,7 @@ export class PipelineError extends Error {
   }
 }
 
-const errorText = (errs: ValidationError[]) => errs.map((e) => `- ${e.message}`).join('\n');
+export const errorText = (errs: ValidationError[]) => errs.map((e) => `- ${e.message}`).join('\n');
 
 /** Make model output safe to validate: snap to the grid, clean ids, fill what the model does not own. */
 function normalise(raw: any): FactorySpec {
@@ -174,7 +174,7 @@ function normalise(raw: any): FactorySpec {
   };
 }
 
-function toOps(raw: any[]): EditOp[] {
+export function toOps(raw: any[]): EditOp[] {
   return raw.map((o): EditOp => {
     switch (o?.op) {
       case 'move':

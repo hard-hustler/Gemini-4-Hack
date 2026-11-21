@@ -26,8 +26,10 @@ Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
       FactorySpec and turns a spoken or typed instruction into edit ops, each
       retried against `validate()` (max 3). `gemini-decision-1` (Decisions API)
       gives a per-element confidence shown on every label.
-- [ ] Milestone 3: Neon proposes improvement ops; propose -> validate -> retry
-      loop; candidates evaluated in parallel.
+- [x] **Milestone 3**: `gemini-4-neon` explains the bottleneck and proposes six
+      candidate op lists; failed ones get one repair round; the Decisions API
+      gates them; survivors are simulated in parallel and ranked. Gated-out
+      candidates are simulated too, so the gate can be audited.
 - [ ] Milestone 4: Shop MCP pricing and cart.
 - [ ] Milestone 5: `/eval` (QAPLIB Nugent gap, validity rate, queue sanity).
 
@@ -52,11 +54,16 @@ shown, routed or simulated.
 | --- | --- | --- |
 | `gemini-4-hydrogen` | sketch / PDF -> spec; voice or text -> edit ops (JSON-schema output) | `server/pipeline.ts` `readPlan`, `editPlan` |
 | `gemini-decision-1` | per-element confidence: is the thing we read really a station / dock? | `server/pipeline.ts` `scoreElements` |
-| `gemini-4-neon` | improvement ops and bottleneck explanation | milestone 3 |
+| `gemini-4-neon` | bottleneck explanation and candidate improvement ops | `server/optimize.ts` |
+| `gemini-decision-1` | cheap gate: score each candidate before simulation | `server/optimize.ts` |
 
 All calls go through `server/gemini.ts` (Interactions API and Decisions API over REST).
 
 ## Known rough edges
+
+- Neon takes 40 to 80 s to propose six candidates.
+- On the fixture the Decisions gate cut the candidate that then simulated best,
+  so treat the gate as a cost saver, not a judge.
 
 - In-browser mic capture is untested; the voice path was tested by posting a
   WAV clip to `/api/edit`.

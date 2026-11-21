@@ -125,3 +125,21 @@ button.rec { background: #7a231c; border-color: var(--warn); animation: pulse 1s
 .notice.busy { border-color: var(--accent); }
 .notice span { color: var(--muted); }
 .notice button { align-self: flex-end; margin-top: 4px; }
+
+.proposal {
+  position: absolute; top: 84px; right: 14px; width: 340px; max-height: calc(100% - 180px); overflow-y: auto; z-index: 20;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; backdrop-filter: blur(8px);
+}
+.proposal header { display: flex; justify-content: space-between; align-items: center; }
+.proposal p { margin: 0; line-height: 1.45; }
+.fine { color: var(--muted); font-size: 11px; }
+.cand { border: 1px solid var(--line); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 4px; background: #1b2027; }
+.cand.gated_out, .cand.invalid { opacity: 0.75; }
+.cand-head { display: flex; justify-content: space-between; gap: 8px; }
+.cand-head em { font-style: normal; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.cand > span { color: var(--muted); }
+.cand > span.warn { color: var(--warn); }
+.deltas { display: flex; flex-wrap: wrap; gap: 4px 10px; font-variant-numeric: tabular-nums; }
+.deltas i { font-style: normal; }
+.cand button { align-self: flex-start; }
+.errors { z-index: 25; }

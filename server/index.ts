@@ -2,6 +2,7 @@
 import express, { type Response } from 'express';
 import type { FactorySpec } from '../src/spec';
 import { GeminiError, MODELS, type Block } from './gemini';
+import { optimise } from './optimize';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 
 const app = express();
@@ -59,6 +60,17 @@ app.post('/api/edit', async (req, res) => {
     const started = Date.now();
     const out = await editPlan(spec, { text, audio: audio ? mediaBlock(audio.mimeType, audio.data) : undefined });
     res.json({ ...out, ms: Date.now() - started });
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// Neon proposes candidates; only validated ones are gated, simulated and returned.
+app.post('/api/optimise', async (req, res) => {
+  try {
+    const { spec } = req.body as { spec: FactorySpec };
+    if (!spec) return void res.status(400).json({ error: 'spec is required' });
+    res.json(await optimise(spec));
   } catch (e) {
     fail(res, e);
   }
