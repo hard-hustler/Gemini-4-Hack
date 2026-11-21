@@ -220,6 +220,8 @@ export interface AdvocateFinding {
   spokenLine: string;
   /** Decisions API: probability that the finding is a specific, checkable defect of this design rather than generic advice */
   decisionConfidence?: number;
+  /** true when every plant fact the finding cites was checked in code against the layout and matched */
+  verified?: boolean;
   /** deterministic: measured by the engines. gemini: written by a technician agent and passed by the checker. */
   source: 'deterministic' | 'gemini';
 }

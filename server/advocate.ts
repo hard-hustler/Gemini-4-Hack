@@ -11,6 +11,7 @@ import {
   crewStartTargets,
   runDeterministicAdvocateAudit,
 } from '../src/engines/advocate';
+import { alreadyOnFloor, checkCites, FACT_KINDS, MACHINE_FACTS, PLANT_FACTS, plantFacts, type Cite, type FactKind } from '../src/engines/facts';
 import type { Routes } from '../src/engines/route';
 import { validate } from '../src/engines/validate';
 import { compare, evaluate, type Metrics } from '../src/engines/versions';
@@ -30,8 +31,15 @@ export interface AuditOptions {
 }
 
 const MAX_PER_TECHNICIAN = 4;
+const MAX_BLOCKERS = 2;
 /** below this the checker thinks a finding is generic advice, and it is dropped */
-const KEEP_AT = 0.5;
+export const KEEP_AT = 0.5;
+
+/** The one question the checker is asked about a finding. Exported so the checker itself can be tested. */
+export const checkerQuestion = (about: string, finding: string): Question => ({
+  type: 'noul',
+  instructions: `The input is the data sheet of a factory design. A reviewer wrote this finding about ${about}: "${finding}" Is this a specific defect of this particular design, naming a real machine or a missing item and giving a concrete reason that can be checked, rather than generic advice that would be true of any factory?`,
+});
 
 /** What each technician looks at. The prompt is the trade, not a personality. */
 const TRADES: Record<AdvocateRole, { doing: string; scope: string; examples: string }> = {
@@ -79,8 +87,10 @@ Your scope: ${TRADES[role].scope}
 How you write:
 - Go machine by machine through the sheet. Report only what is wrong with THIS design. Say nothing about a machine you have no finding for.
 - Every finding names one machine by its id from the sheet, or "plant" when something the whole plant needs is missing.
-- "problem" is one sentence that states the defect and the fact that makes it one: a number from the sheet, or a known property of that make or kind of machine (use what you know about the machine named in the sheet). Give the number.
-- "action" is one imperative sentence a contractor could act on, with a size, rating, distance or part where it applies.
+- "problem" is one sentence of at most 22 words: the defect and the fact that makes it one. Use a number from the sheet, or a known property of that make or kind of machine. Give the number.
+- "action" is one imperative sentence of at most 16 words that a contractor could act on, with a size, rating or distance.
+- "title" is at most 6 words: the thing and what is wrong with it. No machine id in the title.
+- "cites" lists every number from the sheet that the finding rests on, as machine, fact and value. Code checks each one against the plant and throws out a finding that misquotes it, so copy the number exactly. Numbers you know from experience (a current, a voltage, an airflow) are not cites. Machine facts: ${MACHINE_FACTS.join(", ")}. Plant facts (machine "plant"): ${PLANT_FACTS.join(", ")}.
 - No general advice, no praise, no restating the brief, no "consider", "ensure", "it is recommended", "may" or "could". If you would write the same sentence about any factory, do not write it.
 - Do not repeat anything listed under "Already measured". Do not invent machine ids.
 - Stay in your trade. Four other technicians are reviewing the same sheet: ${ADVOCATE_ROLES.filter((r) => r !== role)
@@ -101,10 +111,19 @@ const technicianSchema = {
         type: 'object',
         properties: {
           targetId: { type: 'string', description: 'a machine id exactly as in the sheet, or "plant"' },
-          title: { type: 'string', description: 'at most 9 words: the machine or item and what is wrong' },
-          problem: { type: 'string', description: 'one sentence: the defect and the number or fact behind it' },
+          title: { type: 'string', description: 'at most 6 words: the thing and what is wrong with it' },
+          problem: { type: 'string', description: 'one sentence, at most 22 words: the defect and the number or fact behind it' },
           severity: { type: 'string', enum: ['blocker', 'warning', 'advisory'] },
-          action: { type: 'string', description: 'one imperative sentence with a size, rating or distance' },
+          action: { type: 'string', description: 'one imperative sentence, at most 16 words, with a size, rating or distance' },
+          cites: {
+            type: 'array',
+            description: 'every sheet number this finding rests on; empty if it rests on none',
+            items: {
+              type: 'object',
+              properties: { machine: { type: 'string', description: 'a machine id, or "plant"' }, fact: { type: 'string', enum: [...FACT_KINDS] }, value: { type: 'number' } },
+              required: ['machine', 'fact', 'value'],
+            },
+          },
           fixBy: { type: 'string', enum: ['add_equipment', 'move_machine', 'design_change'] },
           equipmentName: { type: 'string', description: 'the unit to add, e.g. "Wet dust collector"; empty unless fixBy is add_equipment' },
           equipmentW: { type: 'number', description: 'footprint width in metres; 0 if none' },
@@ -114,7 +133,7 @@ const technicianSchema = {
           equipmentNeedsWater: { type: 'boolean' },
           equipmentPrice: { type: 'number', description: 'installed price in US dollars; 0 if none' },
         },
-        required: ['targetId', 'title', 'problem', 'severity', 'action', 'fixBy', 'equipmentName', 'equipmentW', 'equipmentD', 'equipmentH', 'equipmentKw', 'equipmentNeedsWater', 'equipmentPrice'],
+        required: ['targetId', 'title', 'problem', 'severity', 'action', 'cites', 'fixBy', 'equipmentName', 'equipmentW', 'equipmentD', 'equipmentH', 'equipmentKw', 'equipmentNeedsWater', 'equipmentPrice'],
       },
     },
   },
@@ -123,43 +142,33 @@ const technicianSchema = {
 
 /** Everything a technician is given: the plant, its utilities, and one line per machine with the facts that matter. */
 export function plantSheet(spec: FactorySpec, metrics: Metrics, routes: Routes, requirements?: Requirements): string {
-  const util = metrics.sim.utilisation;
+  const facts = plantFacts(spec, metrics, routes);
   const labels = new Map((requirements?.steps ?? []).map((s) => [s.type, s.label]));
   const inFlow = new Set(spec.routing);
-  const gap = (a: FactorySpec['stations'][number], b: FactorySpec['stations'][number]) => {
-    const dx = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w));
-    const dy = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.d, b.y + b.d));
-    return Math.hypot(dx, dy);
-  };
-  const run = (list: Routes['power'], id: string) => list.find((r) => r.id === id)?.length;
   const line = (s: FactorySpec['stations'][number]) => {
-    const others = spec.stations.filter((o) => o.id !== s.id).map((o) => ({ id: o.id, g: gap(s, o) }));
-    const near = others.sort((a, b) => a.g - b.g)[0];
-    const wall = Math.min(s.x, s.y, spec.floor.width - s.x - s.w, spec.floor.depth - s.y - s.d);
-    const p = run(routes.power, s.id);
-    const w = run(routes.water, s.id);
+    const f = facts.machines.get(s.id) ?? {};
+    const near = facts.nearest.get(s.id);
     return [
       s.id,
       labels.get(s.type) ?? s.type,
       s.name ?? s.type,
       `${s.w} x ${s.d}${s.height ? ` x ${s.height}` : ''} m`,
-      s.powerKw ? `${s.powerKw} kW${p !== undefined ? `, ${p.toFixed(0)} m from the supply` : ''}` : 'no power',
-      s.needsWater ? `water${w !== undefined ? `, ${w.toFixed(0)} m from the main` : ''}` : 'no water',
-      inFlow.has(s.type) ? `${s.cycleTimeSec} s a part, ${Math.round((util[s.type] ?? 0) * 100)}% busy, ${s.operators} operator${s.operators === 1 ? '' : 's'}` : 'support equipment',
-      near ? `${near.g.toFixed(1)} m to ${near.id}` : '',
-      `${wall.toFixed(1)} m to the nearest wall`,
+      s.powerKw ? `${s.powerKw} kW${f.supply_run_m !== undefined ? `, ${f.supply_run_m.toFixed(0)} m from the supply` : ''}` : 'no power',
+      s.needsWater ? `water${f.water_run_m !== undefined ? `, ${f.water_run_m.toFixed(0)} m from the main` : ''}` : 'no water',
+      inFlow.has(s.type) ? `${s.cycleTimeSec} s a part, ${f.busy_pct}% busy, ${s.operators} operator${s.operators === 1 ? '' : 's'}` : 'support equipment',
+      near && f.nearest_gap_m !== undefined ? `${f.nearest_gap_m.toFixed(1)} m to ${near}` : '',
+      `${(f.wall_gap_m ?? 0).toFixed(1)} m to the nearest wall`,
       s.zone ?? '',
     ]
       .filter(Boolean)
       .join(' | ');
   };
-  const load = spec.stations.reduce((t, s) => t + s.powerKw, 0);
   const support = spec.stations.filter((s) => !inFlow.has(s.type));
   return [
     `PLANT: ${requirements?.name ?? spec.name ?? 'Factory'}. ${requirements?.summary ?? ''}`,
     `Floor ${spec.floor.width} x ${spec.floor.depth} m. Demand ${spec.demandPerHour} an hour; the simulator measures ${metrics.sim.unitsPerHour.median.toFixed(1)} an hour, bottleneck ${metrics.sim.bottleneck.name}. Lead time ${(metrics.sim.leadTimeSec.median / 60).toFixed(0)} min.`,
     `Parts move by ${spec.transport === 'conveyor' ? `belt conveyor, ${routes.totals.pathM.toFixed(0)} m of it` : `${spec.forklifts ?? 1} forklift(s)`}. Docks: ${spec.docks.map((d) => `${d.kind} on the ${d.wall} wall`).join(', ')}.`,
-    `UTILITIES: electrical supply enters at (${spec.utilityEntry.power.x}, ${spec.utilityEntry.power.y}) m, water main at (${spec.utilityEntry.water.x}, ${spec.utilityEntry.water.y}) m. Connected load ${load.toFixed(0)} kW across ${spec.stations.filter((s) => s.powerKw > 0).length} machines. ${spec.stations.filter((s) => s.needsWater).length} machines take water.`,
+    `UTILITIES: electrical supply enters at (${spec.utilityEntry.power.x}, ${spec.utilityEntry.power.y}) m, water main at (${spec.utilityEntry.water.x}, ${spec.utilityEntry.water.y}) m. Connected load ${(facts.plant.connected_kw ?? 0).toFixed(0)} kW across ${spec.stations.filter((s) => s.powerKw > 0).length} machines. ${spec.stations.filter((s) => s.needsWater).length} machines take water.`,
     `SUPPORT EQUIPMENT ON THE FLOOR: ${support.length ? support.map((s) => s.name ?? s.type).join(', ') : 'none. No compressor, dust or mist collector, generator, UPS, chiller, separator or eye-wash is on the sheet.'}`,
     `MACHINES (id | step | make and model | footprint | power | water | duty | nearest machine | wall | department):`,
     ...spec.stations.map(line),
@@ -172,6 +181,7 @@ interface RawFinding {
   problem?: string;
   severity?: string;
   action?: string;
+  cites?: { machine?: string; fact?: string; value?: number }[];
   fixBy?: string;
   equipmentName?: string;
   equipmentW?: number;
@@ -183,7 +193,9 @@ interface RawFinding {
 }
 
 /** A technician's raw finding, checked in code: real machine, real text, sane equipment. */
-function toFinding(role: AdvocateRole, raw: RawFinding, i: number, spec: FactorySpec): AdvocateFinding | null {
+type Written = AdvocateFinding & { cites: Cite[] };
+
+function toFinding(role: AdvocateRole, raw: RawFinding, i: number, spec: FactorySpec): Written | null {
   const title = String(raw.title ?? '').trim();
   const problem = String(raw.problem ?? '').trim();
   const action = String(raw.action ?? '').trim();
@@ -213,6 +225,10 @@ function toFinding(role: AdvocateRole, raw: RawFinding, i: number, spec: Factory
     fix,
     spokenLine: `${title}. ${problem} ${action}`,
     source: 'gemini',
+    cites: (Array.isArray(raw.cites) ? raw.cites : [])
+      .filter((c) => typeof c?.machine === 'string' && typeof c?.value === 'number' && (FACT_KINDS as readonly string[]).includes(String(c?.fact)))
+      .slice(0, 6)
+      .map((c) => ({ machine: String(c.machine), fact: c.fact as FactKind, value: Number(c.value) })),
   };
 }
 
@@ -228,10 +244,10 @@ const OWNER: [RegExp, AdvocateRole][] = [
  * Two technicians asking for the same unit, or for the same machine to be moved, is one finding.
  * The trade that owns it keeps it; otherwise the more severe one does.
  */
-function dedupe(list: AdvocateFinding[]): AdvocateFinding[] {
+function dedupe<T extends AdvocateFinding>(list: T[]): T[] {
   const rank = { blocker: 0, warning: 1, advisory: 2 } as const;
-  const kept = new Map<string, AdvocateFinding>();
-  const out: AdvocateFinding[] = [];
+  const kept = new Map<string, T>();
+  const out: T[] = [];
   for (const f of list) {
     let key: string | null = null;
     let owner: AdvocateRole | undefined;
@@ -281,7 +297,7 @@ export async function runAdvocateAudit(spec: FactorySpec, emit: Emit, requiremen
   const sheet = plantSheet(spec, ev.metrics, ev.routes, requirements);
   const already = measured.findings.map((f) => `- ${f.targetIds.join(', ') || 'plant'}: ${f.title}`).join('\n') || '- nothing';
 
-  const inspect = async (role: AdvocateRole): Promise<AdvocateFinding[]> => {
+  const inspect = async (role: AdvocateRole): Promise<Written[]> => {
     const who = ADVOCATE_CHARACTERS[role];
     const started = Date.now();
     emit({ stage: 'advocate', actor: 'advocate', who: role, title: `${who.name} is ${TRADES[role].doing}`, ms: 0, status: 'running' });
@@ -295,7 +311,7 @@ export async function runAdvocateAudit(spec: FactorySpec, emit: Emit, requiremen
         input: `${sheet}\n\nAlready measured by the simulator (do not repeat):\n${already}\n\nWrite your findings.`,
       });
       const seen = new Set<string>();
-      const out: AdvocateFinding[] = [];
+      const out: Written[] = [];
       for (const raw of Array.isArray(res.json?.findings) ? res.json.findings : []) {
         const f = toFinding(role, raw, out.length, spec);
         // one finding per machine per technician: the second is usually the first reworded
@@ -311,7 +327,37 @@ export async function runAdvocateAudit(spec: FactorySpec, emit: Emit, requiremen
       return [];
     }
   };
-  const written = dedupe((await Promise.all(ADVOCATE_ROLES.map(inspect))).flat());
+  const drafted = dedupe((await Promise.all(ADVOCATE_ROLES.map(inspect))).flat()) as Written[];
+
+  // Code first: a technician's judgement cannot be re-run, but the plant numbers it quotes can. A finding
+  // that misquotes the layout, or asks for a unit that is already on the floor, is thrown out here.
+  const facts = plantFacts(spec, ev.metrics, ev.routes);
+  const written: AdvocateFinding[] = [];
+  const thrown: string[] = [];
+  let quoted = 0;
+  for (const { cites, ...f } of drafted) {
+    const check = checkCites(cites, facts);
+    const have = f.fix?.kind === 'equipment' ? alreadyOnFloor(spec, f.fix.equipment.name) : null;
+    if (check.wrong.length) {
+      thrown.push(`${f.title}: ${check.wrong[0]}`);
+      continue;
+    }
+    if (have) {
+      thrown.push(`${f.title}: ${have} is already on the floor`);
+      continue;
+    }
+    quoted += check.checked;
+    // verified: every number it quotes is right, or the unit it says is missing really is missing
+    written.push({ ...f, verified: check.checked > 0 || f.fix?.kind === 'equipment' });
+  }
+  emit({
+    stage: 'check',
+    actor: 'engine',
+    title: `Code checked ${quoted} quoted number${quoted === 1 ? '' : 's'} against the plant${thrown.length ? `: threw out ${thrown.length} finding${thrown.length === 1 ? '' : 's'}` : ''}`,
+    detail: thrown.slice(0, 3).join(' · ') || undefined,
+    ms: 0,
+    status: thrown.length ? 'retry' : 'ok',
+  });
 
   // The checker never wrote any of this. It sees the sheet and one finding at a time.
   let kept = written;
@@ -321,10 +367,7 @@ export async function runAdvocateAudit(spec: FactorySpec, emit: Emit, requiremen
       const questions: Record<string, Question> = {};
       written.forEach((f, i) => {
         const st = spec.stations.find((s) => s.id === f.targetIds[0]);
-        questions[`f${i}`] = {
-          type: 'noul',
-          instructions: `The input is the data sheet of a factory design. A reviewer wrote this finding about ${st ? `machine ${st.id} (${st.name ?? st.type})` : 'the plant as a whole'}: "${f.title}. ${f.evidence} Action: ${f.action}" Is this a specific defect of this particular design, naming a real machine or a missing item and giving a concrete reason that can be checked, rather than generic advice that would be true of any factory?`,
-        };
+        questions[`f${i}`] = checkerQuestion(st ? `machine ${st.id} (${st.name ?? st.type})` : 'the plant as a whole', `${f.title}. ${f.evidence} Action: ${f.action}`);
       });
       const d = await decide(sheet, questions);
       written.forEach((f, i) => {
@@ -337,6 +380,16 @@ export async function runAdvocateAudit(spec: FactorySpec, emit: Emit, requiremen
     } catch (e) {
       emit({ stage: 'check', actor: 'decisions', title: 'Checker unavailable; findings are shown unchecked', detail: (e as Error).message, ms: 0, status: 'fail' });
     }
+  }
+
+  // "At most two blockers each" is in the prompt and is not always obeyed, so it is enforced here:
+  // each technician keeps the two blockers the checker is surest of, and the rest become warnings.
+  for (const role of ADVOCATE_ROLES) {
+    kept
+      .filter((f) => f.role === role && f.severity === 'blocker')
+      .sort((a, b) => (b.decisionConfidence ?? 0) - (a.decisionConfidence ?? 0))
+      .slice(MAX_BLOCKERS)
+      .forEach((f) => (f.severity = 'warning'));
   }
 
   const report = buildReport(spec, [...measured.findings, ...kept], 'full', crewStartTargets(spec, ev.metrics));

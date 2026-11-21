@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "eval": "tsx --env-file=.env eval/run.ts"
+    "eval": "tsx --env-file=.env eval/run.ts",
+    "check:checker": "tsx --env-file=.env scripts/check-checker.ts"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",

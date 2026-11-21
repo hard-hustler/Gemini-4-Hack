@@ -2,6 +2,7 @@
 // Raw JSON-RPC tools/call over HTTP as documented at https://shop.dev/docs/quickstart
 // (anonymous search: no key, no session, no initialize call).
 
+import { randomUUID } from 'node:crypto';
 import type { FactorySpec } from '../src/spec';
 
 const ENDPOINT = 'https://mcp.shop.com/';
@@ -35,7 +36,8 @@ export interface ShopOption {
   description?: string;
 }
 
-export async function searchCatalog(query: string, limit: number): Promise<any[]> {
+/** One Shop MCP tool call. Only the tools named here can be reached; nothing that pays or completes an order is. */
+async function callShopTool(name: 'search_catalog' | 'create_checkout', args: object): Promise<any> {
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: {
@@ -43,7 +45,7 @@ export async function searchCatalog(query: string, limit: number): Promise<any[]
       Accept: 'application/json, text/event-stream',
       'MCP-Protocol-Version': PROTOCOL,
       'Mcp-Method': 'tools/call',
-      'Mcp-Name': 'search_catalog',
+      'Mcp-Name': name,
     },
     signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({
@@ -51,8 +53,8 @@ export async function searchCatalog(query: string, limit: number): Promise<any[]
       id: 1,
       method: 'tools/call',
       params: {
-        name: 'search_catalog',
-        arguments: { catalog: { query, context: { address_country: 'US', currency: 'USD' }, pagination: { limit } } },
+        name,
+        arguments: args,
         _meta: {
           'io.modelcontextprotocol/protocolVersion': PROTOCOL,
           'io.modelcontextprotocol/clientInfo': { name: 'dry-run', version: '0.1.0' },
@@ -62,10 +64,62 @@ export async function searchCatalog(query: string, limit: number): Promise<any[]
     }),
   });
   const json: any = await res.json().catch(() => null);
-  if (!res.ok || json?.error) throw new Error(`Shop search failed: ${json?.error?.message ?? res.status}`);
-  if (json?.result?.isError) throw new Error(`Shop search tool error: ${JSON.stringify(json.result._meta ?? {}).slice(0, 200)}`);
-  const doc = json?.result?.structuredContent ?? JSON.parse(json?.result?.content?.[0]?.text ?? '{}');
+  // never put the raw response in an error: a checkout document carries its own access token
+  if (!res.ok || json?.error || json?.result?.isError) throw new Error(`Shop could not complete ${name} (${res.status})`);
+  return json?.result?.structuredContent ?? JSON.parse(json?.result?.content?.[0]?.text ?? '{}');
+}
+
+export async function searchCatalog(query: string, limit: number): Promise<any[]> {
+  const doc = await callShopTool('search_catalog', { catalog: { query, context: { address_country: 'US', currency: 'USD' }, pagination: { limit } } });
   return Array.isArray(doc.products) ? doc.products : [];
+}
+
+export interface Checkout {
+  /** the merchant's own secure checkout page: where the buyer reviews the order and approves payment */
+  url: string;
+  seller: string;
+  currency?: string;
+  /** order total in the currency's minor units, as the merchant states it before shipping and tax */
+  totalMinor?: number;
+  /** true when Shop could not create a checkout and the listing's direct buy link is used instead */
+  direct: boolean;
+}
+
+/**
+ * Buy: turn a listing's buy link into a checkout at its merchant, for the quantity the plan needs.
+ * This creates an unpaid checkout and returns where to open it. It never pays: the buyer approves
+ * payment on the merchant's page. The merchant and variant are read from the link Shop itself gave us.
+ */
+export async function createCheckout(buyUrl: string, quantity: number): Promise<Checkout> {
+  let link: URL;
+  try {
+    link = new URL(buyUrl);
+  } catch {
+    throw new Error('This item has no buy link. Open its listing instead.');
+  }
+  const variant = /^\/buy\/(\d+):\d+$/.exec(link.pathname)?.[1];
+  if (link.protocol !== 'https:' || !variant) throw new Error('This item has no buy link. Open its listing instead.');
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) throw new Error('Quantity must be between 1 and 100.');
+  const seller = link.hostname;
+  link.pathname = `/buy/${variant}:${quantity}`;
+  const direct: Checkout = { url: link.toString(), seller, direct: true };
+  try {
+    const doc = await callShopTool('create_checkout', {
+      shop: seller,
+      checkout: { line_items: [{ item: { id: `gid://shopify/ProductVariant/${variant}` }, quantity }], context: { address_country: 'US' } },
+      meta: { 'idempotency-key': randomUUID() },
+    });
+    // trust the checkout only if it is the order that was asked for, at a Shopify or merchant address
+    const line = Array.isArray(doc.line_items) && doc.line_items.length === 1 ? doc.line_items[0] : null;
+    const url = new URL(String(doc.continue_url));
+    const host = url.hostname;
+    const safeHost = host === seller || host === 'shop.app' || host === 'checkout.shopify.com' || host.endsWith('.myshopify.com');
+    if (!line || !String(line.item?.id ?? '').endsWith(`/${variant}`) || line.quantity !== quantity || url.protocol !== 'https:' || !safeHost || !/^\/(checkouts?|cart\/c)\//.test(url.pathname)) return direct;
+    const total = (Array.isArray(doc.totals) ? doc.totals : []).find((t: any) => t?.type === 'total');
+    return { url: url.toString(), seller, currency: typeof doc.currency === 'string' ? doc.currency : undefined, totalMinor: Number.isSafeInteger(total?.amount) ? total.amount : undefined, direct: false };
+  } catch {
+    return direct;
+  }
 }
 
 /** Read a width x depth footprint out of listing text such as `48" x 22"`, "48x22 Inch" or "120 x 60 cm". */

@@ -11,39 +11,12 @@ import { Icon } from '../ui/icons';
 import type { CrewBubble } from '../ui/AdvocateCharacters';
 import { Scene, type Layers } from '../ui/Scene';
 
-type Goal = 'cost' | 'lead' | 'build';
 interface Deltas {
   uph: number;
   leadMin: number;
   costPerUnit: number;
   buildCost: number;
 }
-interface Tried {
-  name: string;
-  reason: string;
-  source: 'neon' | 'search';
-  outcome: 'kept' | 'simulated' | 'gated out' | 'rejected' | 'vetoed';
-  errors?: string[];
-  vetoReasons?: string[];
-  gate?: number;
-  deltas?: Deltas;
-}
-interface ImproveResult {
-  goalLabel: string;
-  explanation: string;
-  rounds: { n: number; tried: Tried[]; kept?: string; advocateVerdict?: AdvocateReport['verdict']; ms: number }[];
-  kept: { round: number; name: string; spec: FactorySpec }[];
-  deltas: Deltas;
-  meetsDemand: boolean;
-  advocateReport?: AdvocateReport | null;
-  stopped: string;
-  ms: number;
-}
-interface SandboxResult {
-  explanation: string;
-  candidates: { name: string; status: 'evaluated' | 'invalid' | 'gated_out'; spec?: FactorySpec; errors?: string[]; deltas?: Deltas & { forkliftM: number } }[];
-}
-
 interface ActiveSpeech {
   role: CharacterRole;
   targetLabel: string;
@@ -86,19 +59,19 @@ function useNarrow() {
   return narrow;
 }
 
-type Tab = 'overview' | 'improve' | 'evals' | 'equipment' | 'versions';
+type Tab = 'overview' | 'evals' | 'equipment' | 'versions';
 
 /** What one technician is doing while the evals run. */
 type CrewLive = Partial<Record<AdvocateRole, { state: 'writing' | 'done' | 'failed'; text: string; top?: string }>>;
 
+/** 18,000 dollars -> "$18k": prices on a button. */
+const shortPrice = (v: number) => (v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${Math.round(v)}`);
+
+/** What stands behind a finding: the simulator measured it, code checked its numbers against the plant, or it is a technician's call. */
+const proof = (f: AdvocateFinding) => (f.source === 'deterministic' ? 'measured' : f.verified ? 'numbers checked' : 'judgement');
+
 /** How a finding gets fixed: measured ones by moving things, the rest as the technician said. */
 const fixKind = (f: AdvocateFinding) => f.fix?.kind ?? (f.source === 'deterministic' ? 'layout' : 'spec');
-const GOALS: { id: Goal; label: string }[] = [
-  { id: 'cost', label: 'Cost per unit' },
-  { id: 'lead', label: 'Lead time' },
-  { id: 'build', label: 'Build cost' },
-];
-
 function Stat({ label, value, unit, sub, tone }: { label: string; value: string; unit?: string; sub?: string; tone?: 'warn' }) {
   return (
     <div className={`stat ${tone ?? ''}`}>
@@ -217,16 +190,16 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; title: string; lines: string[] } | null>(null);
   const [command, setCommand] = useState('');
   const [recording, setRecording] = useState(false);
-  const [goal, setGoal] = useState<Goal>('cost');
-  const [mode, setMode] = useState<'improve' | 'sandbox' | 'audit' | 'fix' | null>(null);
-  const [improved, setImproved] = useState<(ImproveResult & { saved: string[] }) | null>(null);
-  const [sandbox, setSandbox] = useState<SandboxResult | null>(null);
+  const [mode, setMode] = useState<'audit' | 'fix' | null>(null);
   const [cmp, setCmp] = useState<{ a: string; b: string } | null>(null);
 
   // Evals: the crew's report (null until Run evals is clicked), what each of them is doing meanwhile, fixes, voice
   const [serverAudit, setServerAudit] = useState<AdvocateReport | null>(null);
   const [crewLive, setCrewLive] = useState<CrewLive>({});
   const keepAudit = useRef<{ id: string; report: AdvocateReport } | null>(null);
+  const [buying, setBuying] = useState<string | null>(null);
+  // checkouts the browser would not open in a window: shown as a link in the row instead
+  const [blocked, setBlocked] = useState<Record<string, string>>({});
   const [roleFilter, setRoleFilter] = useState<AdvocateRole | 'all'>('all');
   const [activeFindingId, setActiveFindingId] = useState<string | null>(null);
   const [fixProposal, setFixProposal] = useState<FixProposal | null>(null);
@@ -556,7 +529,6 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     setMode(null);
     if (!out) return;
     setServerAudit(out);
-    if (out.findings.length) setActiveFindingId(out.findings[0].id);
   };
 
   /** Technician findings cannot be re-measured, so they are carried across a fix unless the fix clears them. */
@@ -651,53 +623,6 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     });
   };
 
-  /** The improve loop. Each kept change still has to pass the measured checks, but the crew is not deployed. */
-  const improve = async () => {
-    setMode('improve');
-    setImproved(null);
-    setSandbox(null);
-    setFixProposal(null);
-    const out = await call<ImproveResult>('Improving the layout', '/api/improve', {
-      spec: draft,
-      goal,
-      requirements: project.requirements,
-    });
-    if (!out) return;
-    const added: Version[] = [];
-    let parent = current;
-    let n = nextN;
-    if (dirty && evaluation.ok) {
-      parent = makeVersion(draft, evaluation.metrics, current, n++, 'Edited by hand');
-      added.push(parent);
-    }
-    for (const k of out.kept) {
-      const ev = evaluate(k.spec);
-      if (!ev.ok) continue;
-      parent = makeVersion(k.spec, ev.metrics, parent, n++, `Agent, round ${k.round}: ${k.name}`);
-      added.push(parent);
-    }
-    setImproved({ ...out, saved: added.filter((v) => v.label.startsWith('Agent')).map((v) => v.id) });
-    if (added.length) onChange({ versions: [...versions, ...added], currentId: parent.id });
-  };
-
-  const deepSearch = async () => {
-    setMode('sandbox');
-    setImproved(null);
-    setSandbox(null);
-    const out = await call<SandboxResult>('Starting the sandbox', '/api/deep-search', { spec: draft });
-    if (out) setSandbox(out);
-  };
-
-  const applySpec = (name: string, spec: FactorySpec) => {
-    const errs = validate(spec);
-    if (errs.length) return void setRejected(errs);
-    setDraft(spec);
-    setServerAudit(null);
-    setFixProposal(null);
-    setRejected([]);
-    setNotice({ tone: 'ok', title: `Applied “${name}” to the draft`, lines: ['Save it as a version to keep it.'] });
-  };
-
   const liveErrors = preview ? previewErrors : rejected;
   const sel = selected ? shown.stations.find((s) => s.id === selected) : null;
   const dLead = (v1.metrics.sim.leadTimeSec.median - sim.leadTimeSec.median) / 60;
@@ -718,6 +643,32 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     }
     return [...map.values()];
   }, [draft]);
+  /**
+   * Buy: straight to the seller's checkout, where payment is approved. The window is opened inside the
+   * click (browsers block it otherwise) and pointed at the checkout as soon as Shop has created it.
+   */
+  const buy = async (r: { name: string; qty: number; checkoutUrl?: string }) => {
+    if (!r.checkoutUrl) return;
+    const w = Math.min(520, window.screen.availWidth);
+    const h = Math.min(820, window.screen.availHeight);
+    const popup = window.open('', 'dryrun-checkout', `popup=yes,width=${w},height=${h},left=${Math.round(window.screenX + (window.outerWidth - w) / 2)},top=${Math.round(window.screenY + (window.outerHeight - h) / 2)}`);
+    if (popup) {
+      popup.document.title = 'Checkout';
+      popup.document.body.style.cssText = 'margin:0;height:100vh;display:grid;place-items:center;font:15px system-ui,sans-serif;color:#26282a;background:#faf6ee;text-align:center;padding:24px;box-sizing:border-box';
+      popup.document.body.textContent = `Opening secure checkout for ${r.qty} × ${r.name}…`;
+    }
+    setBuying(r.checkoutUrl);
+    try {
+      const out = await api<{ url: string }>('/api/shop/checkout', { buyUrl: r.checkoutUrl, quantity: r.qty });
+      if (popup && !popup.closed) popup.location.replace(out.url);
+      else if (!window.open(out.url, '_blank')) setBlocked((cur) => ({ ...cur, [r.checkoutUrl as string]: out.url }));
+    } catch (e) {
+      popup?.close();
+      setNotice({ tone: 'error', title: 'Could not open the checkout', lines: [(e as Error).message] });
+    } finally {
+      setBuying(null);
+    }
+  };
   const cmpA = cmp && versions.find((v) => v.id === cmp.a);
   const cmpB = cmp && versions.find((v) => v.id === cmp.b);
   const outcomeIcon = { kept: 'check', simulated: 'minus', 'gated out': 'minus', rejected: 'x', vetoed: 'shield' } as const;
@@ -787,7 +738,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
 
       <aside className="panel" style={narrow ? undefined : { width: PANEL }}>
         <nav className="tabs" role="tablist">
-          {(['overview', 'improve', 'evals', 'equipment', 'versions'] as const).map((t) => (
+          {(['overview', 'evals', 'equipment', 'versions'] as const).map((t) => (
             <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
               {t[0].toUpperCase() + t.slice(1)}
               {t === 'evals' && totalOpenFindings > 0 && <em>{totalOpenFindings}</em>}
@@ -846,7 +797,7 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   </p>
                 ) : (
                   <>
-                    <p className="say">Not run on this layout. Five technicians inspect every machine and say what is wrong with it.</p>
+                    <p className="say">Not run on this layout.</p>
                     <div className="row">
                       <button className="primary sm" disabled={busy} onClick={() => void runEvals()}>
                         <Icon name="shield" size={14} /> Run evals
@@ -925,125 +876,12 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
             </>
           )}
 
-          {tab === 'improve' && (
-            <>
-              <div className="section">
-                <h3>Meet demand, then optimise</h3>
-                <div className="segmented" role="radiogroup" aria-label="Goal">
-                  {GOALS.map((g) => (
-                    <button key={g.id} role="radio" aria-checked={goal === g.id} className={goal === g.id ? 'on' : ''} disabled={busy} onClick={() => setGoal(g.id)}>
-                      {g.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="row">
-                  <button className="primary sm" disabled={busy} onClick={() => void improve()}>
-                    Improve layout
-                  </button>
-                  <button className="text sm" disabled={busy} onClick={() => void deepSearch()} title="A managed agent runs eight seeded searches in a remote sandbox">
-                    Sandbox
-                  </button>
-                </div>
-              </div>
-
-              {busy && (mode === 'improve' || mode === 'sandbox') && (
-                <div className="section">
-                  <div className="live">
-                    <span className="spinner ink" />
-                    {run.live ?? 'Working'}
-                  </div>
-                  {run.events.map((e, i) => (
-                    <div key={i} className={`tried ${e.status === 'fail' ? 'rejected' : /: kept “/.test(e.title) ? 'kept' : ''}`}>
-                      <Icon name={e.status === 'fail' ? 'x' : 'check'} size={14} />
-                      <div>
-                        <b>{e.title}</b>
-                        {e.detail && <span>{e.detail}</span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!busy && improved && (
-                <>
-                  <div className="section">
-                    <p className="say">
-                      {improved.kept.length ? (
-                        <>
-                          Kept <b>{improved.kept.length}</b> change{improved.kept.length > 1 ? 's' : ''} over {improved.rounds.length} rounds, saved as {improved.saved.join(' and ')}. Stopped because {improved.stopped}.
-                        </>
-                      ) : (
-                        <>Nothing beat the layout you have. Stopped because {improved.stopped}.</>
-                      )}
-                      {!improved.meetsDemand && <b className="warn"> It still falls short of demand.</b>}
-                    </p>
-                    {improved.kept.length > 0 && <DeltaLine d={improved.deltas} />}
-                    {improved.explanation && <p className="muted small">{improved.explanation}</p>}
-                  </div>
-                  {improved.rounds.map((r) => (
-                    <div key={r.n} className="section round">
-                      <header>
-                        <b>Round {r.n}</b>
-                        <span className="muted small">
-                          {r.advocateVerdict ? `gate: ${r.advocateVerdict} · ` : ''}
-                          {(r.ms / 1000).toFixed(0)} s
-                        </span>
-                      </header>
-                      {r.tried.map((t, i) => (
-                        <div key={i} className={`tried ${t.outcome === 'kept' ? 'kept' : t.outcome === 'rejected' || t.outcome === 'vetoed' ? 'rejected' : ''}`}>
-                          <Icon name={outcomeIcon[t.outcome]} size={14} />
-                          <div>
-                            <b>
-                              {t.name}
-                              {t.outcome === 'kept' ? ' · kept' : t.outcome === 'vetoed' ? ' · vetoed' : ''}
-                            </b>
-                            <span>
-                              {t.source === 'search' ? 'Search' : 'Neon'}
-                              {t.gate !== undefined ? ` · pre-check ${Math.round(t.gate * 100)}%` : ''}
-                              {t.outcome === 'gated out' ? ' · not simulated' : ''}
-                              {t.outcome === 'rejected' ? ` · broke a rule: ${(t.errors ?? [])[0] ?? ''}` : ''}
-                              {t.outcome === 'vetoed' ? ` · failed the measured checks: ${(t.vetoReasons ?? []).join('; ')}` : ''}
-                            </span>
-                            {t.deltas && <DeltaLine d={t.deltas} />}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </>
-              )}
-
-              {!busy && sandbox && (
-                <div className="section round">
-                  <p className="muted small">{sandbox.explanation}</p>
-                  {sandbox.candidates.map((c, i) => (
-                    <div key={i} className={`tried ${c.status === 'invalid' ? 'rejected' : ''}`}>
-                      <Icon name={c.status === 'invalid' ? 'x' : 'minus'} size={14} />
-                      <div>
-                        <b>{c.name}</b>
-                        {c.deltas && <DeltaLine d={c.deltas} />}
-                        {c.status === 'invalid' && <span>Broke a rule: {(c.errors ?? [])[0]}</span>}
-                        {c.spec && (
-                          <div className="row" style={{ marginTop: 4 }}>
-                            <button className="ghost sm" onClick={() => applySpec(c.name, c.spec!)}>
-                              Apply to draft
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-
           {tab === 'evals' && (
             <>
               {!activeAudit && !evalRunning && (
                 <div className="section evals-empty">
                   <h3>Evals</h3>
-                  <p className="say">Five senior technicians walk this floor and inspect every machine for their own trade: process, safety, electrical, plumbing and air, machines. A separate checker drops anything that is not specific to this design.</p>
+                  <p className="say">Five technicians inspect every machine and list what to fix.</p>
                   <div className="row">
                     <button className="primary" disabled={busy} onClick={() => void runEvals()}>
                       <Icon name="shield" size={15} /> Run evals
@@ -1138,17 +976,13 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   <div className="adv-head">
                     <h3>Evals</h3>
                     <span className={`adv-verdict ${activeAudit.verdict}`}>
-                      {activeAudit.blockerCount} blocker{activeAudit.blockerCount === 1 ? '' : 's'} · {activeAudit.warningCount} warning{activeAudit.warningCount === 1 ? '' : 's'} · {activeAudit.advisoryCount} note{activeAudit.advisoryCount === 1 ? '' : 's'}
+                      {activeAudit.blockerCount} blocker{activeAudit.blockerCount === 1 ? '' : 's'} · {activeAudit.warningCount} warning{activeAudit.warningCount === 1 ? '' : 's'}
                     </span>
                   </div>
-                  <p className="muted small">
-                    {findings.filter((f) => f.source === 'gemini').length} written by the technicians and passed by the checker, {findings.filter((f) => f.source === 'deterministic').length} measured by the simulator.
-                  </p>
-
                   <div className="row">
                     {missingUnits.length > 0 && (
                       <button className="primary sm" disabled={busy || !!fixProposal} onClick={() => previewEquipment(missingUnits)}>
-                        <Icon name="plus" size={13} /> Add {missingUnits.length} missing unit{missingUnits.length === 1 ? '' : 's'}
+                        <Icon name="plus" size={13} /> Add {missingUnits.length} unit{missingUnits.length === 1 ? '' : 's'}
                       </button>
                     )}
                     {layoutIssues.length > 0 && (
@@ -1193,54 +1027,61 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                       filteredFindings.map((f) => {
                         const char = ADVOCATE_CHARACTERS[f.role];
                         const kind = fixKind(f);
+                        const open = activeFindingId === f.id;
+                        const locked = busy || !!fixProposal;
                         return (
                           <div
                             key={f.id}
-                            className={`adv-row${activeFindingId === f.id ? ' active' : ''}`}
+                            className={`ev-row${open ? ' open' : ''}`}
                             onClick={() => {
-                              setActiveFindingId(f.id);
+                              setActiveFindingId(open ? null : f.id);
                               if (f.targetIds[0]) setSelected(f.targetIds[0]);
                             }}
                           >
-                            <div className="adv-meta">
-                              <span className="adv-dot" style={{ background: char.accent }} />
-                              <span className={`adv-sev ${f.severity}`}>{f.severity === 'advisory' ? 'note' : f.severity}</span>
-                              <span>· {char.shortTitle}</span>
-                              <span>· {f.targetIds.length ? f.targetIds.join(', ') : 'whole plant'}</span>
-                              <span className="adv-src">{f.source === 'deterministic' ? 'measured' : f.decisionConfidence !== undefined ? `checker ${Math.round(f.decisionConfidence * 100)}%` : 'unchecked'}</span>
+                            <span className={`ev-sev ${f.severity}`} title={f.severity === 'advisory' ? 'note' : f.severity} />
+                            <div className="ev-main">
+                              <div className="ev-title">{f.title}</div>
+                              <div className="ev-sub">
+                                {f.targetIds.length ? f.targetIds.join(', ') : 'Plant'} · {char.shortTitle} · {proof(f)}
+                              </div>
+                              {open && (
+                                <>
+                                  <p className="ev-why">{f.evidence}</p>
+                                  <p className="ev-fix">
+                                    <b>Fix</b> {f.action ?? f.suggestedFixHint}
+                                  </p>
+                                </>
+                              )}
                             </div>
-                            <div className="adv-title">{f.title}</div>
-                            <div className="adv-evidence">{f.evidence}</div>
-                            <div className="adv-do">
-                              <b>Fix</b> {f.action ?? f.suggestedFixHint}
-                            </div>
-                            <div className="adv-actions" onClick={(e) => e.stopPropagation()}>
+                            <div className="ev-act" onClick={(e) => e.stopPropagation()}>
                               {kind === 'equipment' && f.fix?.kind === 'equipment' && (
-                                <button className="ghost sm" disabled={busy || !!fixProposal} onClick={() => previewEquipment([f])}>
-                                  <Icon name="plus" size={13} /> Add it{f.fix.equipment.price ? ` · ${money(f.fix.equipment.price)}` : ''}
+                                <button className="ghost sm" disabled={locked} onClick={() => previewEquipment([f])} title={`Place ${f.fix.equipment.name} on the floor`}>
+                                  Add{f.fix.equipment.price ? ` ${shortPrice(f.fix.equipment.price)}` : ''}
                                 </button>
                               )}
                               {kind === 'layout' && (
-                                <button className="ghost sm" disabled={busy || !!fixProposal} onClick={() => void requestFix([f])}>
-                                  <Icon name="wrench" size={13} /> Preview fix
+                                <button className="ghost sm" disabled={locked} onClick={() => void requestFix([f])} title="Draft a layout fix and simulate it">
+                                  Fix
                                 </button>
                               )}
                               {kind === 'spec' && (
-                                <button className="ghost sm" disabled={busy || !!fixProposal} onClick={() => markDone(f)} title="A design or procedure change: tick it off once it is in the spec">
-                                  <Icon name="check" size={13} /> Mark done
+                                <button className="ghost sm" disabled={locked} onClick={() => markDone(f)} title="A design change: tick it off once it is in the spec">
+                                  Done
                                 </button>
                               )}
-                              <button
-                                className="icon-btn"
-                                title="Read aloud"
-                                aria-label="Read this finding aloud"
-                                onClick={() => {
-                                  setWalkthroughIdx(null);
-                                  hearFinding(f);
-                                }}
-                              >
-                                <Icon name="volume" size={14} />
-                              </button>
+                              {open && (
+                                <button
+                                  className="icon-btn"
+                                  title="Read aloud"
+                                  aria-label="Read this finding aloud"
+                                  onClick={() => {
+                                    setWalkthroughIdx(null);
+                                    hearFinding(f);
+                                  }}
+                                >
+                                  <Icon name="volume" size={14} />
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -1257,12 +1098,27 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
               {bill.map((r, i) => (
                 <div key={i} className="bill-row">
                   <span>
-                    {r.qty} × {r.name}
+                    {r.qty} ×{' '}
+                    {r.listingUrl ? (
+                      <a href={r.listingUrl} target="_blank" rel="noreferrer" title="Open the listing">
+                        {r.name}
+                      </a>
+                    ) : (
+                      r.name
+                    )}
                   </span>
                   <span>{money(r.qty * r.price)}</span>
-                  {r.checkoutUrl || r.listingUrl ? (
-                    <a className="small" href={r.checkoutUrl ? r.checkoutUrl.replace(/:1(?=\?|$)/, `:${r.qty}`) : r.listingUrl} target="_blank" rel="noreferrer">
-                      {r.checkoutUrl ? 'Buy' : 'Listing'}
+                  {r.checkoutUrl && blocked[r.checkoutUrl] ? (
+                    <a className="small" href={blocked[r.checkoutUrl]} target="_blank" rel="noreferrer" title="Your browser blocked the checkout window">
+                      Open checkout
+                    </a>
+                  ) : r.checkoutUrl ? (
+                    <button className="ghost sm" disabled={buying !== null} onClick={() => void buy(r)} title={`Open checkout for ${r.qty} at the seller`}>
+                      {buying === r.checkoutUrl ? <span className="spinner ink" /> : 'Buy'}
+                    </button>
+                  ) : r.listingUrl ? (
+                    <a className="small" href={r.listingUrl} target="_blank" rel="noreferrer">
+                      Listing
                     </a>
                   ) : (
                     <span />

@@ -13,7 +13,7 @@ import { optimise } from './optimize';
 import { layoutProject, planProject } from './harness';
 import { convertListing } from './recipes';
 import { design, inspect, revise, scout, type StepBrief } from './sculpt';
-import { priceEquipment, searchListings } from './shop';
+import { createCheckout, priceEquipment, searchListings } from './shop';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 
 const app = express();
@@ -194,6 +194,18 @@ app.post(
 );
 
 // ---- Catalog seam: Shopify search and listing -> CatalogItem ----
+// Buy: create an unpaid checkout at the listing's merchant and say where to open it.
+// Nothing here pays. The buyer approves payment on the merchant's own page.
+app.post('/api/shop/checkout', async (req, res) => {
+  try {
+    const { buyUrl, quantity } = req.body as { buyUrl?: string; quantity?: number };
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await createCheckout(String(buyUrl ?? ''), Number(quantity ?? 1)));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
 app.post('/api/catalog/search', async (req, res) => {
   try {
     const { query } = req.body as { query: string };

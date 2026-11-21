@@ -28,7 +28,8 @@ Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
    agent per step to source and model real equipment. A workshop or a line is
    sourced from Shop first; a whole plant is designed from the process.
 4. **Simulation**: a valid layout in 3D, simulated over 30 shifts. Drag, type or
-   speak edits, ask for improvements, save and compare versions.
+   speak edits, run the evals and fix what they find, buy the equipment, save
+   and compare versions.
 
 ## Harness design
 
@@ -109,12 +110,28 @@ a contractor could act on, and write nothing that would be true of any factory.
 - **Builders propose.** Five `gemini-4-neon` calls in parallel, at most four
   findings each, one per machine. Code rejects findings that name a machine
   that does not exist, and merges two technicians asking for the same unit.
+- **Code checks the numbers.** A technician's judgement cannot be re-run, but
+  the plant numbers it rests on can. Each finding lists the sheet numbers it
+  quotes (a machine's power, its gap to a neighbour, a run length), and
+  `checkCites` in `src/engines/facts.ts` compares every one with the layout. A
+  finding that misquotes the plant is thrown out, and so is one that asks for
+  a unit already on the floor. What survives is marked "numbers checked"; a
+  finding that quotes nothing is marked "judgement".
 - **A checker decides.** `gemini-decision-1` sees the sheet and one finding at
   a time and scores whether it is a specific, checkable defect of this design
-  or generic advice. Below 50% it is dropped; the score is shown on the finding.
+  or generic advice. Below 50% it is dropped.
+- **Code caps severity.** Each technician keeps at most two blockers, the two
+  the checker is surest of; the rest become warnings.
 - **The engines measure.** Throughput against demand, wall pinches, long
   utility runs, backtracking flow and boxed-in machines are computed, not
   written, and are marked "measured".
+
+`npm run check:checker` tests the checker itself, since the technicians rarely
+give it anything bad to drop: it is fed ten findings that are generic on
+purpose and five built from real numbers on the machine shop's sheet. Run of
+2026-11-21: all ten generic ones scored 1 to 3% and were dropped; four of the
+five specific ones were kept (the fifth claimed the bandsaw needs shop air,
+which the checker scored 41%).
 
 Every finding carries its fix, and how it is fixed depends on what it is:
 
@@ -127,12 +144,29 @@ Every finding carries its fix, and how it is fixed depends on what it is:
 - **A design or procedure change** (a 200 V transformer for the lathes, an
   interlocked laser enclosure): *Mark done* once it is in the spec.
 
-On the machine shop demo a run takes about a minute and returns around twenty
-findings, for example that the Hitachi Seiki lathes are 200 V machines on a
-plant with no step-down transformer, that the 30 W fibre laser is an open
-Class 4 beam with no enclosure, and that the CMM sits 2 m from the heated
-parts washer. The improve loop still gates each change it keeps, but only on
-the measured checks; it does not deploy the crew.
+Run on the three saved demos on 2026-11-21:
+
+| Demo | Stations | Time | Findings | Numbers quoted and checked | Thrown out |
+| --- | --- | --- | --- | --- | --- |
+| CNC machine shop | 27 | 73 s | 18 written + 3 measured | 33 | 0 |
+| Electric car plant | 60 | 30 s | 17 written + 5 measured | 29 | 1 by code |
+| Espresso workshop | 10 | 38 s | 11 written + 2 measured | 19 | 1 by the checker |
+
+Examples: the Hitachi Seiki lathes are 200 V machines on a plant with no
+step-down transformer; the 30 W fibre laser is an open Class 4 beam; on the car
+plant the battery marriage station sits 7 m from a 450 kW curing oven, and a
+belt conveyor cannot carry a body-in-white through a dip tank.
+
+## Buying
+
+Buy in the Equipment tab goes straight to the seller. The server asks Shop to
+create a checkout for that listing at the quantity the plan needs
+(`create_checkout`, as worked out on the `lindsey/shopify-changes` branch) and
+the app opens the seller's own checkout page in a window, where the order is
+reviewed and payment approved. The app never pays and never sees card details.
+If Shop cannot create the checkout, the listing's direct buy link is opened
+instead. The improve loop and the sandbox search are still on the server
+(`/api/improve`, `/api/deep-search`) but no longer have a tab.
 
 ## Demos
 

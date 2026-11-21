@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { workshop } from '../fixtures/workshop';
 import { applyOp, applyOps, type FactorySpec } from '../spec';
 import { cost } from './cost';
+import { alreadyOnFloor, checkCites, plantFacts } from './facts';
 import { route } from './route';
 import { simulate, simulateOnce, type LineModel } from './simulate';
 import { validate } from './validate';
@@ -233,5 +234,43 @@ describe('conveyor routing', () => {
   it('never makes a unit travel further than twice the forklift route', () => {
     // sharing a trunk is a detour, and the simulator charges for it: keep the detour bounded
     expect(route(belt).totals.forkliftM).toBeLessThanOrEqual(route(workshop).totals.forkliftM * 2);
+  });
+});
+
+describe('quoted facts', () => {
+  const ev = evaluate(workshop, 6);
+  if (!ev.ok) throw new Error('fixture must evaluate');
+  const facts = plantFacts(workshop, ev.metrics, ev.routes);
+  const st = workshop.stations[2];
+  const real = facts.machines.get(st.id)!;
+
+  it('accepts a number quoted correctly, within rounding', () => {
+    const out = checkCites(
+      [
+        { machine: st.id, fact: 'power_kw', value: st.powerKw },
+        { machine: st.id, fact: 'nearest_gap_m', value: Math.round(real.nearest_gap_m! * 10) / 10 },
+        { machine: 'plant', fact: 'floor_width_m', value: workshop.floor.width },
+        { machine: 'plant', fact: 'demand_per_hour', value: workshop.demandPerHour },
+      ],
+      facts,
+    );
+    expect(out.wrong).toEqual([]);
+    expect(out.checked).toBe(4);
+  });
+  it('rejects a misquoted number, an unknown machine and a fact the machine does not have', () => {
+    expect(checkCites([{ machine: st.id, fact: 'nearest_gap_m', value: real.nearest_gap_m! + 3 }], facts).wrong).toHaveLength(1);
+    expect(checkCites([{ machine: 'lathe99', fact: 'power_kw', value: 5 }], facts).wrong[0]).toMatch(/not a machine/);
+    expect(checkCites([{ machine: st.id, fact: 'conveyor_m', value: 10 }], facts).wrong[0]).toMatch(/has no/);
+    expect(checkCites([{ machine: 'plant', fact: 'machine_count', value: workshop.stations.length + 1 }], facts).wrong).toHaveLength(1);
+  });
+  it('knows when a unit said to be missing is already on the floor', () => {
+    const withCompressor: FactorySpec = { ...workshop, stations: [...workshop.stations, { ...st, id: 'screwcompressor1', type: 'screwcompressor', name: 'Screw compressor with dryer', x: 0, y: 0 }] };
+    expect(alreadyOnFloor(withCompressor, '22 kW rotary screw compressor')).toBe('screwcompressor1');
+    expect(alreadyOnFloor(workshop, '22 kW rotary screw compressor')).toBeNull();
+    expect(alreadyOnFloor(workshop, 'Plumbed eye-wash station')).toBeNull();
+    // a shared word is not the same unit: a water-leak test booth is not an oil-water separator
+    const withBooth: FactorySpec = { ...workshop, stations: [...workshop.stations, { ...st, id: 'watertest1', type: 'watertest', name: 'Water-leak test booth', x: 0, y: 0 }] };
+    expect(alreadyOnFloor(withBooth, 'Coalescing oil-water separator')).toBeNull();
+    expect(alreadyOnFloor(withCompressor, 'Oil-free screw compressor with refrigerated dryer and 500 L receiver')).toBe('screwcompressor1');
   });
 });

@@ -43,31 +43,8 @@ export function Demos({
         }
       />
       <main className="catalog">
-        {projects.length > 0 && (
-          <>
-            <h1>Your projects</h1>
-            <div className="project-list">
-              {projects.map((p) => {
-                const v = p.versions[p.versions.length - 1];
-                return (
-                  <div key={p.id} className="project-row">
-                    <button onClick={() => onOpenProject(p)}>{p.name}</button>
-                    <span>
-                      {p.requirements.floor.width} × {p.requirements.floor.depth} m
-                    </span>
-                    <span>{p.equipment.reduce((t, l) => t + l.qty, 0)} stations</span>
-                    <span>{v ? `v${p.versions.length} · ${num(v.metrics.sim.unitsPerHour.median)} / h` : 'No layout yet'}</span>
-                    <button className="icon-btn" onClick={() => onDelete(p.id)} aria-label={`Delete ${p.name}`} title="Delete project">
-                      <Icon name="trash" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-        <h1 style={projects.length ? { marginTop: 36 } : undefined}>Demos</h1>
-        <p className="lede">Projects the harness has built, saved as they came out. Open one to walk the floor, change it, and run the improve loop on it. Each opens as a copy of your own.</p>
+        <h1>Demos</h1>
+        <p className="lede">Projects the harness has built, saved as they came out. Open one to walk the floor, change it, and run the evals on it. Each opens as a copy of your own.</p>
         {error && <Notice tone="error" title={error} onClose={() => setError(null)} />}
         <div className="demo-grid">
           {DEMOS.map((d) => (
@@ -99,6 +76,29 @@ export function Demos({
             </button>
           ))}
         </div>
+        {projects.length > 0 && (
+          <>
+            <h1 style={{ marginTop: 36 }}>Your projects</h1>
+            <div className="project-list">
+              {projects.map((p) => {
+                const v = p.versions[p.versions.length - 1];
+                return (
+                  <div key={p.id} className="project-row">
+                    <button onClick={() => onOpenProject(p)}>{p.name}</button>
+                    <span>
+                      {p.requirements.floor.width} × {p.requirements.floor.depth} m
+                    </span>
+                    <span>{p.equipment.reduce((t, l) => t + l.qty, 0)} stations</span>
+                    <span>{v ? `v${p.versions.length} · ${num(v.metrics.sim.unitsPerHour.median)} / h` : 'No layout yet'}</span>
+                    <button className="icon-btn" onClick={() => onDelete(p.id)} aria-label={`Delete ${p.name}`} title="Delete project">
+                      <Icon name="trash" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </main>
     </div>
   );
