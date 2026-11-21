@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { TraceEvent } from '../contracts';
 import { Icon } from './icons';
-import { CommerceCartButton } from './Commerce';
 
 export function Wordmark({ onClick }: { onClick?: () => void }) {
   return (
@@ -99,7 +98,6 @@ export function TopBar({
           </div>
         )}
         {right}
-        <CommerceCartButton />
       </div>
     </header>
   );

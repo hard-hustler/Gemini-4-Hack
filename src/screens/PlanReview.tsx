@@ -8,14 +8,11 @@ import { Icon } from '../ui/icons';
 import { featureText } from '../machines';
 import { MachineThumb } from '../ui/thumbs';
 import { Swarm } from './Swarm';
-import { CommerceDrawer, ShopifyAttribution, ShopProductCard } from '../ui/Commerce';
-import { formatPrice, priceSubtotals } from '../commerce';
 
 const WALL = { N: 'north', S: 'south', E: 'east', W: 'west' } as const;
 
 function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () => void; onPick: (item: CatalogItem, trace: TraceEvent[]) => void }) {
-  const initialQuery = line.item.listing?.currency && line.item.listing.currency !== 'USD' ? 'heavy duty steel shelving rack' : line.item.name;
-  const [query, setQuery] = useState(initialQuery);
+  const [query, setQuery] = useState(line.item.name);
   const [listings, setListings] = useState<ShopListing[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,7 +20,6 @@ function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () =
   const search = async () => {
     setBusy('search');
     setError(null);
-    setListings(null);
     try {
       setListings((await api<{ listings: ShopListing[] }>('/api/catalog/search', { query })).listings);
     } catch (e) {
@@ -45,8 +41,17 @@ function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () =
   };
 
   return (
-    <CommerceDrawer title={`Replace ${line.label}`} onClose={onClose}>
-        <ShopifyAttribution />
+    <div className="scrim" onClick={onClose}>
+      <aside className="drawer" onClick={(e) => e.stopPropagation()} aria-label="Replace equipment">
+        <header>
+          <div>
+            <span className="muted small">Replace the equipment for</span>
+            <h2>{line.label}</h2>
+          </div>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">
+            <Icon name="x" />
+          </button>
+        </header>
         <form
           className="search"
           onSubmit={(e) => {
@@ -54,7 +59,7 @@ function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () =
             void search();
           }}
         >
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="steel workbench" aria-label="Search Shop" maxLength={200} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="steel workbench" aria-label="Search Shop" autoFocus />
           <button className="primary" disabled={!!busy || !query.trim()}>
             {busy === 'search' ? 'Searching' : 'Search Shop'}
           </button>
@@ -63,11 +68,37 @@ function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () =
         {listings === null && !busy && <p className="muted">Choosing a listing reads its size and power from the listing text and checks that it suits this step.</p>}
         {listings?.length === 0 && <p className="muted">Nothing found for that search.</p>}
         <div>
-          {listings?.map((listing) => (
-            <ShopProductCard key={listing.variantId} listing={listing} busy={!!busy} onUse={(chosen) => void use(chosen)} />
+          {listings?.map((l) => (
+            <div key={l.variantId} className="listing">
+              {l.image ? <img src={l.image} alt="" /> : <div className="listing-blank" />}
+              <div className="listing-body">
+                <b>{l.title.slice(0, 84)}</b>
+                <span>
+                  {l.seller}
+                  {l.rating ? ` · rated ${l.rating}` : ''}
+                  {l.dims ? ` · ${l.dims.w} × ${l.dims.d} m` : ''}
+                </span>
+                <div className="listing-foot">
+                  <strong>{money(l.price)}</strong>
+                  <a className="small" href={l.url} target="_blank" rel="noreferrer">
+                    Listing
+                  </a>
+                  <button className="ghost sm" disabled={!!busy} onClick={() => void use(l)}>
+                    {busy === l.variantId ? (
+                      <>
+                        <span className="spinner ink" /> Reading specs
+                      </>
+                    ) : (
+                      'Use this'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
           ))}
         </div>
-    </CommerceDrawer>
+      </aside>
+    </div>
   );
 }
 
@@ -109,8 +140,7 @@ export function PlanReview({
   const run = useRun();
   const req = project.requirements;
   const lines = project.equipment;
-  const totalText = priceSubtotals(lines.map((line) => ({ listing: line.item.listing, price: line.item.price, quantity: line.qty })))
-    .map((subtotal) => `${formatPrice({ price: 0, ...subtotal })}${subtotal.estimated ? ' (includes estimates)' : ''}`).join(' + ') || 'USD 0.00';
+  const total = lines.reduce((t, l) => t + l.qty * l.item.price, 0);
   const stations = lines.reduce((t, l) => t + l.qty, 0);
   const doubtful = lines.filter((l) => l.inBrief !== undefined && l.inBrief < 0.5);
   const checked = lines.some((l) => l.inBrief !== undefined);
@@ -269,7 +299,7 @@ export function PlanReview({
                               </span>
                             )}
                           </div>
-                          <span className="equip-price">{l.item.listing ? formatPrice(l.item.listing) : `${money(l.item.price)} est.`}</span>
+                          <span className="equip-price">{money(l.item.price)}</span>
                           <div className="stepper" role="group" aria-label={`Quantity of ${l.label}`}>
                             <button onClick={() => setLine(i, { qty: Math.max(0, l.qty - 1) })} aria-label="One fewer">
                               <Icon name="minus" size={14} />
@@ -335,7 +365,7 @@ export function PlanReview({
 
         <footer className="pd-foot">
           <span className="num">
-            {stations} stations · {totalText}
+            {stations} stations · {money(total)}
           </span>
           <RunStatus state={run} />
           <div className="pd-actions" ref={setActionsHost}>

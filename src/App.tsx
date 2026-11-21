@@ -8,7 +8,6 @@ import { BriefBackdrop, PlanReview } from './screens/PlanReview';
 import { Workspace } from './screens/Workspace';
 import { loadProjects, saveProjects, type Project } from './store';
 import { ThumbRenderer } from './ui/thumbs';
-import { CommerceProvider } from './ui/Commerce';
 
 type Route = { name: 'landing' } | { name: 'new'; text?: string } | { name: 'catalog' } | { name: 'demos' } | { name: 'plan' | 'sim'; id: string };
 
@@ -74,9 +73,9 @@ export default function App() {
     );
   }
   return (
-    <CommerceProvider>
+    <>
       <ThumbRenderer />
       {screen}
-    </CommerceProvider>
+    </>
   );
 }

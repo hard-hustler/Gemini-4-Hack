@@ -9,7 +9,6 @@ import '../ui/home.css';
 import { Icon } from '../ui/icons';
 import { Scene } from '../ui/Scene';
 import { demoProject } from './Landing';
-import { CommerceCartButton } from '../ui/Commerce';
 
 interface EvalResults {
   validity?: { oneCallValidShare: number; placerValidShare: number; n: number };
@@ -218,7 +217,6 @@ export function Home({
           <button className="hn-link" onClick={onDemos}>
             {hasProjects ? 'Projects' : 'Demos'}
           </button>
-          <CommerceCartButton />
           <button className="hn-link" onClick={onCatalog}>
             Catalog
           </button>

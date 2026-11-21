@@ -13,12 +13,11 @@ import { optimise } from './optimize';
 import { layoutProject, planProject } from './harness';
 import { convertListing } from './recipes';
 import { design, inspect, revise, scout, type StepBrief } from './sculpt';
-import { commerceRoutes } from './commerce-routes';
+import { priceEquipment, searchListings } from './shop';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 
 const app = express();
 app.use(express.json({ limit: '30mb' }));
-app.use(commerceRoutes());
 
 function mediaBlock(mimeType: string, data: string): Block {
   const type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : 'document';
@@ -195,6 +194,16 @@ app.post(
 );
 
 // ---- Catalog seam: Shopify search and listing -> CatalogItem ----
+app.post('/api/catalog/search', async (req, res) => {
+  try {
+    const { query } = req.body as { query: string };
+    if (!query?.trim()) return void res.status(400).json({ error: 'query is required' });
+    res.json({ listings: await searchListings(query.trim()) });
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
 app.post(
   '/api/catalog/convert',
   streamed<{ listing: Parameters<typeof convertListing>[0]; step: Parameters<typeof convertListing>[1] }>(({ listing, step }, emit) => {
@@ -230,9 +239,4 @@ app.post('/api/dev/save', (req, res) => {
 });
 
 const port = Number(process.env.PORT ?? 8787);
-const server = app.listen(port);
-server.on('listening', () => console.log(`api on http://localhost:${port} (key ${process.env.GEMINI_API_KEY ? 'set' : 'MISSING'})`));
-server.on('error', () => {
-  console.error(`Cannot start API on port ${port}. If another app is running, use PORT=8788 npm run dev.`);
-  process.exitCode = 1;
-});
+app.listen(port, () => console.log(`api on http://localhost:${port} (key ${process.env.GEMINI_API_KEY ? 'set' : 'MISSING'})`));
