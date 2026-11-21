@@ -1,6 +1,7 @@
 // The landing page. Structure borrowed from the best engineering-software sites: one claim,
 // the problem, what it does in numbered steps, proof with real numbers, then the ask.
 import { useEffect, useMemo, useState } from 'react';
+import { runDeterministicAdvocateAudit } from '../engines/advocate';
 import { evaluate } from '../engines/versions';
 import { money, num, type Project } from '../store';
 import '../ui/home.css';
@@ -33,7 +34,9 @@ export function Home({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: {
     const p = demoProject();
     const spec = p.versions[0].spec;
     const ev = evaluate(spec, 4);
-    return { spec, routes: ev.ok ? ev.routes : null, metrics: p.versions[0].metrics };
+    const routes = ev.ok ? ev.routes : null;
+    const walkPlans = routes ? runDeterministicAdvocateAudit(spec, p.versions[0].metrics, routes).walkPlans : [];
+    return { spec, routes, metrics: p.versions[0].metrics, walkPlans };
   }, []);
   const [results, setResults] = useState<EvalResults | null>(null);
   useEffect(() => {
@@ -110,7 +113,7 @@ export function Home({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: {
           </figure>
           <figure className="shard b">
             <div className="shard-clip live">
-              <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false }} interactive={false} />
+              <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: false, crew: true }} walkPlans={hero.walkPlans} interactive={false} />
             </div>
             <figcaption className="mono">The simulation, live</figcaption>
           </figure>
@@ -151,7 +154,7 @@ export function Home({ projects, onNew, onCatalog, onOpen, onDemo, onDelete }: {
               </span>
             </div>
             <div className="home-screen-view">
-              <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: true }} interactive={false} />
+              <Scene spec={hero.spec} routes={hero.routes} layers={{ flow: true, routes: false, power: false, water: false, labels: true, crew: true }} walkPlans={hero.walkPlans} interactive={false} />
             </div>
           </div>
         </div>

@@ -1,8 +1,9 @@
 // Small Node proxy for model calls. The key stays server-side in GEMINI_API_KEY.
 import express, { type Request, type Response } from 'express';
-import type { Emit } from '../src/contracts';
+import type { AdvocateFinding, Emit, Requirements } from '../src/contracts';
 import type { FactorySpec } from '../src/spec';
 import { GeminiError, MODELS, type Block } from './gemini';
+import { isCharacterRole, proposeAdvocateFix, runAdvocateAudit, synthesizeAdvocateSpeech } from './advocate';
 import { deepSearch } from './agent';
 import { improveToGoal, type Goal } from './improve';
 import { optimise } from './optimize';
@@ -137,14 +138,43 @@ app.post(
   }),
 );
 
-// Goal-driven improve loop: propose -> validate -> gate -> simulate -> keep the best -> repeat.
+// Goal-driven improve loop with automatic 5-agent Devil's Advocate gate.
 app.post(
   '/api/improve',
-  streamed<{ spec: FactorySpec; goal?: Goal }>(async ({ spec, goal }, emit) => {
+  streamed<{ spec: FactorySpec; goal?: Goal; requirements?: Requirements }>(async ({ spec, goal, requirements }, emit) => {
     if (!spec) throw new Error('spec is required');
-    return improveToGoal(spec, goal ?? 'cost', emit);
+    return improveToGoal(spec, goal ?? 'cost', emit, requirements);
   }),
 );
+
+// ---- 5-Agent Devil's Advocate Audit, Surgical Fixer, and Real-Time Character Voice ----
+app.post(
+  '/api/advocate/audit',
+  streamed<{ spec: FactorySpec; requirements?: Requirements }>(async ({ spec, requirements }, emit) => {
+    if (!spec) throw new Error('spec is required');
+    return runAdvocateAudit(spec, emit, requirements, { fastGate: false });
+  }),
+);
+
+app.post(
+  '/api/advocate/fix',
+  streamed<{ spec: FactorySpec; findings?: AdvocateFinding[]; requirements?: Requirements }>(async ({ spec, findings, requirements }, emit) => {
+    if (!spec) throw new Error('spec is required');
+    return proposeAdvocateFix(spec, Array.isArray(findings) ? findings : [], emit, requirements);
+  }),
+);
+
+app.post('/api/advocate/speak', async (req, res) => {
+  try {
+    const { role, text } = req.body as { role?: string; text?: string };
+    if (!text?.trim()) return void res.status(400).json({ error: 'text is required' });
+    const charRole = isCharacterRole(role) ? role : 'stress';
+    const out = await synthesizeAdvocateSpeech(charRole, text.trim());
+    res.json(out);
+  } catch (e) {
+    fail(res, e);
+  }
+});
 
 // ---- Harness: brief -> plan -> (user review) -> layout ----
 app.post(

@@ -6,7 +6,7 @@
 
 import type { FeatureKind, MachineRecipe } from './machines';
 import type { MachineModel } from './model3d';
-import type { Wall } from './spec';
+import type { EditOp, FactorySpec, Point, Wall } from './spec';
 
 /** One buyable or built-in piece of equipment. The catalog team owns the look (modelUrl, colour). */
 export interface CatalogItem {
@@ -136,8 +136,8 @@ export interface EquipmentLine {
 
 /** One thing the harness did. The UI shows these as the run tracker; they are also the audit log. */
 export interface TraceEvent {
-  stage: 'read' | 'research' | 'plan' | 'check' | 'equip' | 'place' | 'simulate' | 'improve' | 'convert';
-  actor: 'hydrogen' | 'neon' | 'decisions' | 'agent' | 'engine' | 'shop';
+  stage: 'read' | 'research' | 'plan' | 'check' | 'equip' | 'place' | 'simulate' | 'improve' | 'convert' | 'advocate' | 'fix';
+  actor: 'hydrogen' | 'neon' | 'decisions' | 'agent' | 'engine' | 'shop' | 'advocate' | 'fixer';
   title: string;
   detail?: string;
   ms: number;
@@ -153,4 +153,100 @@ export interface PlanResult {
   /** 0..1 Decisions API score: how completely the plan covers the brief */
   coverage?: number;
   trace: TraceEvent[];
+}
+
+// ---- Devil's Advocate Review, Surgical Fixer, and 3D Floor Crew ----
+
+export type AdvocateRole = 'stress' | 'safety' | 'cfo' | 'compliance' | 'maintenance';
+export type CharacterRole = AdvocateRole | 'fixer';
+export type AdvocateSeverity = 'blocker' | 'warning' | 'advisory';
+export type AdvocateVerdict = 'pass' | 'warn' | 'veto';
+export type AdvocateVoice = 'Fenrir' | 'Kore' | 'Charon' | 'Zephyr' | 'Puck';
+
+export interface AdvocateCharacter {
+  role: CharacterRole;
+  name: string;
+  title: string;
+  shortTitle: string;
+  accent: string;
+  suitColor: string;
+  vestColor: string;
+  hatColor: string;
+  skinColor: string;
+  prop: 'tablet' | 'clipboard' | 'ledger' | 'blueprint' | 'wrench' | 'laser';
+  voice: AdvocateVoice;
+  style: string;
+}
+
+export interface AdvocateFinding {
+  id: string;
+  role: AdvocateRole;
+  severity: AdvocateSeverity;
+  title: string;
+  evidence: string;
+  metricDeltaHint: string;
+  targetIds: string[];
+  suggestedFixHint: string;
+  /** First-person critique delivered aloud by the 3D floor character */
+  spokenLine: string;
+  /** Calibrated risk probability from Gemini Decisions API when full audit runs */
+  decisionConfidence?: number;
+  source: 'deterministic' | 'gemini';
+}
+
+export interface CharacterWalkPlan {
+  role: CharacterRole;
+  targetId: string | null;
+  targetLabel: string;
+  standPoint: Point;
+  lookAtPoint: Point;
+  /** Obstacle-free A* floor waypoints in floor metres [0..width, 0..depth] */
+  path: Point[];
+  findingIds: string[];
+  primaryFindingId: string | null;
+}
+
+export interface AgentVerdictSummary {
+  role: AdvocateRole;
+  verdict: AdvocateVerdict;
+  findingCount: number;
+  blockerCount: number;
+  decisionScore?: number;
+  note: string;
+}
+
+export interface AdvocateReport {
+  verdict: AdvocateVerdict;
+  summary: string;
+  blockerCount: number;
+  warningCount: number;
+  advisoryCount: number;
+  findings: AdvocateFinding[];
+  agentVerdicts: AgentVerdictSummary[];
+  walkPlans: CharacterWalkPlan[];
+  ms: number;
+  mode: 'deterministic' | 'full';
+}
+
+export interface MetricDeltas {
+  uph: number;
+  leadMin: number;
+  costPerUnit: number;
+  buildCost: number;
+}
+
+export interface FixProposal {
+  id: string;
+  targetFindingIds: string[];
+  summary: string;
+  spokenSummary: string;
+  ops: EditOp[];
+  spec: FactorySpec;
+  deltas: MetricDeltas;
+  resolvedCount: number;
+  remainingBlockers: number;
+  remainingWarnings: number;
+  postAudit: AdvocateReport;
+  source: 'neon' | 'deterministic';
+  ms: number;
 }
