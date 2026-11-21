@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dry Run eval</title>
+<style>
+  :root { --bg:#14171c; --panel:#1b2027; --line:#323a45; --text:#e9e6dd; --muted:#98a1ad; --accent:#f2c230; --good:#6fcf7f; --warn:#ff7a5c; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 'IBM Plex Sans','Helvetica Neue',Arial,sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:28px 16px 60px; }
+  h1 { color:var(--accent); text-transform:uppercase; letter-spacing:.04em; font-size:22px; margin:0; }
+  h2 { font-size:16px; margin:32px 0 4px; }
+  p { color:var(--muted); margin:4px 0 12px; max-width:70ch; }
+  a { color:var(--accent); }
+  .wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; background:var(--panel); }
+  th,td { padding:6px 10px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+  th:first-child,td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:500; }
+  td.note { text-align:left; white-space:normal; color:var(--muted); min-width:220px; }
+  .good { color:var(--good); } .warn { color:var(--warn); }
+  .big { display:flex; gap:28px; flex-wrap:wrap; margin:8px 0 12px; }
+  .big div { display:flex; flex-direction:column; }
+  .big b { font-size:26px; } .big span { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Dry Run eval</h1>
+  <p id="when"></p>
+  <p>One model call compared with the harness (propose, validate, feed errors back, then deterministic search). Raw data: <a href="results.json">results.json</a>. Re-run with <code>npm run eval</code>.</p>
+
+  <h2>1. Layout quality: QAPLIB Nugent instances</h2>
+  <p>Gap to the best-known value from QAPLIB. "Search only" runs the same local search from a random start, so you can see how much of the harness result comes from the model's starting point and how much from the search.</p>
+  <div class="wrap"><table id="qap"></table></div>
+
+  <h2>2. Validity on unseen plans</h2>
+  <p>Ten generated text plans, tighter as the number goes up. "One call" is the first model answer checked by validate(); "harness" allows up to three attempts with the errors fed back.</p>
+  <div class="big" id="vsum"></div>
+  <div class="wrap"><table id="val"></table></div>
+
+  <h2>3. Simulator sanity: queue wait vs M/M/c formula</h2>
+  <p>A single station with Poisson arrivals and exponential service, 30 seeds of 400 simulated hours each, against the textbook mean wait in queue.</p>
+  <div class="wrap"><table id="queue"></table></div>
+</main>
+<script>
+const cell = (v, cls) => `<td${cls ? ` class="${cls}"` : ''}>${v ?? ''}</td>`;
+const pct = (v) => (v === undefined ? 'invalid' : v.toFixed(2) + '%');
+fetch('results.json').then((r) => r.json()).then((d) => {
+  document.getElementById('when').textContent = 'Generated ' + new Date(d.generatedAt).toLocaleString();
+  document.getElementById('qap').innerHTML =
+    '<tr><th>Instance</th><th>n</th><th>Best known</th><th>One call cost</th><th>One call gap</th><th>Harness cost</th><th>Harness gap</th><th>Search only gap</th><th>Random start gap</th></tr>' +
+    (d.qap ?? []).map((q) => '<tr>' + cell(q.instance) + cell(q.n) + cell(q.bestKnown) +
+      cell(q.oneCall?.cost ?? 'invalid', q.oneCall?.valid ? '' : 'warn') + cell(pct(q.oneCall?.gapPct), 'warn') +
+      cell(q.harness?.cost ?? 'none', q.harness?.valid ? '' : 'warn') + cell(pct(q.harness?.gapPct), q.harness?.gapPct === 0 ? 'good' : '') +
+      cell(pct(q.searchOnly?.gapPct)) + cell(pct(q.randomStart?.gapPct)) + '</tr>').join('');
+  const v = d.validity;
+  if (v) {
+    document.getElementById('vsum').innerHTML =
+      `<div><b class="warn">${Math.round(v.oneCallValidShare * 100)}%</b><span>valid, one call</span></div>` +
+      `<div><b class="good">${Math.round(v.harnessValidShare * 100)}%</b><span>valid, harness</span></div>` +
+      `<div><b class="${v.validButWrongStationCount ? 'warn' : ''}">${v.validButWrongStationCount}</b><span>valid but wrong station count</span></div>`;
+    document.getElementById('val').innerHTML =
+      '<tr><th>Plan</th><th>Stations asked</th><th>Stations got</th><th>Floor (m)</th><th>One call</th><th>Harness</th><th>Attempts</th><th>First error</th></tr>' +
+      v.rows.map((r) => '<tr>' + cell(r.id) + cell(r.stations) + cell(r.gotStations ?? '', r.gotStations !== undefined && r.gotStations !== r.stations ? 'warn' : '') + cell(r.floor) +
+        cell(r.firstCallValid ? 'valid' : 'invalid', r.firstCallValid ? 'good' : 'warn') + cell(r.harnessValid ? 'valid' : 'invalid', r.harnessValid ? 'good' : 'warn') +
+        cell(r.attempts) + cell(r.firstErrors?.[0] ?? r.apiError ?? '', 'note') + '</tr>').join('');
+  }
+  document.getElementById('queue').innerHTML =
+    '<tr><th>Case</th><th>Theory wait (s)</th><th>Sim wait (s)</th><th>Error</th><th>Theory util</th><th>Sim util</th><th>Within 5%</th></tr>' +
+    (d.queue ?? []).map((q) => '<tr>' + cell(q.case) + cell(q.theoryWqSec) + cell(q.simWqSec) + cell(q.errorPct + '%') + cell(q.theoryUtil) + cell(q.simUtil) + cell(q.pass ? 'yes' : 'no', q.pass ? 'good' : 'warn') + '</tr>').join('');
+});
+</script>
+</body>
+</html>

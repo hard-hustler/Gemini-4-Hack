@@ -1,0 +1,287 @@
+{
+  "generatedAt": "2026-11-21T18:27:34.938Z",
+  "queue": [
+    {
+      "case": "M/M/1 rho 0.50",
+      "theoryWqSec": 60,
+      "simWqSec": 60.35,
+      "errorPct": 0.58,
+      "theoryUtil": 0.5,
+      "simUtil": 0.501,
+      "pass": true
+    },
+    {
+      "case": "M/M/1 rho 0.75",
+      "theoryWqSec": 180,
+      "simWqSec": 181.59,
+      "errorPct": 0.88,
+      "theoryUtil": 0.75,
+      "simUtil": 0.753,
+      "pass": true
+    },
+    {
+      "case": "M/M/1 rho 0.90",
+      "theoryWqSec": 540,
+      "simWqSec": 560.55,
+      "errorPct": 3.81,
+      "theoryUtil": 0.9,
+      "simUtil": 0.902,
+      "pass": true
+    },
+    {
+      "case": "M/M/2 rho 0.80",
+      "theoryWqSec": 106.67,
+      "simWqSec": 107.11,
+      "errorPct": 0.42,
+      "theoryUtil": 0.8,
+      "simUtil": 0.801,
+      "pass": true
+    }
+  ],
+  "qap": [
+    {
+      "instance": "nug12",
+      "n": 12,
+      "bestKnown": 578,
+      "source": "QAPLIB (coral.ise.lehigh.edu), nug*.dat / nug*.sln",
+      "dataCheck": "published solution reproduces best-known cost",
+      "oneCall": {
+        "valid": true,
+        "cost": 684,
+        "ms": 39109,
+        "gapPct": 18.34
+      },
+      "harness": {
+        "valid": true,
+        "cost": 578,
+        "gapPct": 0,
+        "modelAttempts": 1,
+        "searchMs": 13
+      },
+      "randomStart": {
+        "cost": 828,
+        "gapPct": 43.25
+      },
+      "searchOnly": {
+        "cost": 578,
+        "gapPct": 0
+      }
+    },
+    {
+      "instance": "nug15",
+      "n": 15,
+      "bestKnown": 1150,
+      "source": "QAPLIB (coral.ise.lehigh.edu), nug*.dat / nug*.sln",
+      "dataCheck": "published solution reproduces best-known cost",
+      "oneCall": {
+        "valid": true,
+        "cost": 1570,
+        "ms": 25446,
+        "gapPct": 36.52
+      },
+      "harness": {
+        "valid": true,
+        "cost": 1160,
+        "gapPct": 0.87,
+        "modelAttempts": 1,
+        "searchMs": 27
+      },
+      "randomStart": {
+        "cost": 1666,
+        "gapPct": 44.87
+      },
+      "searchOnly": {
+        "cost": 1166,
+        "gapPct": 1.39
+      }
+    },
+    {
+      "instance": "nug20",
+      "n": 20,
+      "bestKnown": 2570,
+      "source": "QAPLIB (coral.ise.lehigh.edu), nug*.dat / nug*.sln",
+      "dataCheck": "published solution reproduces best-known cost",
+      "oneCall": {
+        "valid": true,
+        "cost": 2776,
+        "ms": 35824,
+        "gapPct": 8.02
+      },
+      "harness": {
+        "valid": true,
+        "cost": 2604,
+        "gapPct": 1.32,
+        "modelAttempts": 1,
+        "searchMs": 62
+      },
+      "randomStart": {
+        "cost": 3408,
+        "gapPct": 32.61
+      },
+      "searchOnly": {
+        "cost": 2630,
+        "gapPct": 2.33
+      }
+    },
+    {
+      "instance": "nug30",
+      "n": 30,
+      "bestKnown": 6124,
+      "source": "QAPLIB (coral.ise.lehigh.edu), nug*.dat / nug*.sln",
+      "dataCheck": "published solution reproduces best-known cost",
+      "oneCall": {
+        "valid": true,
+        "cost": 6946,
+        "ms": 34114,
+        "gapPct": 13.42
+      },
+      "harness": {
+        "valid": true,
+        "cost": 6222,
+        "gapPct": 1.6,
+        "modelAttempts": 1,
+        "searchMs": 102
+      },
+      "randomStart": {
+        "cost": 7972,
+        "gapPct": 30.18
+      },
+      "searchOnly": {
+        "cost": 6294,
+        "gapPct": 2.78
+      }
+    }
+  ],
+  "validity": {
+    "n": 10,
+    "model": "gemini-4-hydrogen",
+    "oneCallValidShare": 0.6,
+    "harnessValidShare": 1,
+    "validButWrongStationCount": 1,
+    "rows": [
+      {
+        "id": 1,
+        "stations": 5,
+        "floor": "22x15",
+        "text": "Plan 1. A workshop 22 m wide (east-west) by 15 m deep (north-south). Goods come in through a dock on the west wall and leave through a dock on the west wall. Process flow: inspect then kitting then assembly then prep. Equipment: 1 inspect station, 1 kitting station, 1 assembly station, 2 prep stations. Demand is 26 units per hour. Power comes in at the south wall and water at the south wall. Put storage right beside the inbound dock.",
+        "firstCallValid": true,
+        "harnessValid": true,
+        "attempts": 1,
+        "firstErrors": [],
+        "gotStations": 6
+      },
+      {
+        "id": 2,
+        "stations": 6,
+        "floor": "21x14",
+        "text": "Plan 2. A workshop 21 m wide (east-west) by 14 m deep (north-south). Goods come in through a dock on the west wall and leave through a dock on the east wall. Process flow: storage then kitting then inspect then pack. Equipment: 1 storage station, 1 kitting station, 2 inspect stations, 2 pack stations. Demand is 31 units per hour. Power comes in at the east wall and water at the west wall. Group stations of the same type side by side.",
+        "firstCallValid": true,
+        "harnessValid": true,
+        "attempts": 1,
+        "firstErrors": [],
+        "gotStations": 6
+      },
+      {
+        "id": 3,
+        "stations": 7,
+        "floor": "20x14",
+        "text": "Plan 3. A workshop 20 m wide (east-west) by 14 m deep (north-south). Goods come in through a dock on the north wall and leave through a dock on the west wall. Process flow: paint then pack then storage then prep then assembly. Equipment: 1 paint station, 1 pack station, 3 storage stations, 1 prep station, 1 assembly station. Demand is 41 units per hour. Power comes in at the west wall and water at the west wall. Keep the middle of the floor clear for a main aisle.",
+        "firstCallValid": true,
+        "harnessValid": true,
+        "attempts": 1,
+        "firstErrors": [],
+        "gotStations": 7
+      },
+      {
+        "id": 4,
+        "stations": 8,
+        "floor": "19x13",
+        "text": "Plan 4. A workshop 19 m wide (east-west) by 13 m deep (north-south). Goods come in through a dock on the east wall and leave through a dock on the east wall. Process flow: paint then test then storage then pack then kitting. Equipment: 3 paint stations, 1 test station, 2 storage stations, 1 pack station, 1 kitting station. Demand is 25 units per hour. Power comes in at the north wall and water at the south wall. Keep the middle of the floor clear for a main aisle.",
+        "firstCallValid": true,
+        "harnessValid": true,
+        "attempts": 1,
+        "firstErrors": [],
+        "gotStations": 8
+      },
+      {
+        "id": 5,
+        "stations": 9,
+        "floor": "18x12",
+        "text": "Plan 5. A workshop 18 m wide (east-west) by 12 m deep (north-south). Goods come in through a dock on the east wall and leave through a dock on the east wall. Process flow: paint then kitting then assembly then inspect then test then storage. Equipment: 3 paint stations, 2 kitting stations, 1 assembly station, 1 inspect station, 1 test station, 1 storage station. Demand is 44 units per hour. Power comes in at the south wall and water at the east wall. Line the stations along the walls.",
+        "firstCallValid": true,
+        "harnessValid": true,
+        "attempts": 1,
+        "firstErrors": [],
+        "gotStations": 9
+      },
+      {
+        "id": 6,
+        "stations": 10,
+        "floor": "17x12",
+        "text": "Plan 6. A workshop 17 m wide (east-west) by 12 m deep (north-south). Goods come in through a dock on the west wall and leave through a dock on the east wall. Process flow: label then inspect then paint then weld then storage then prep. Equipment: 2 label stations, 2 inspect stations, 1 paint station, 1 weld station, 1 storage station, 3 prep stations. Demand is 24 units per hour. Power comes in at the south wall and water at the south wall. Group stations of the same type side by side.",
+        "firstCallValid": true,
+        "harnessValid": true,
+        "attempts": 1,
+        "firstErrors": [],
+        "gotStations": 10
+      },
+      {
+        "id": 7,
+        "stations": 11,
+        "floor": "15x11",
+        "text": "Plan 7. A workshop 15 m wide (east-west) by 11 m deep (north-south). Goods come in through a dock on the south wall and leave through a dock on the south wall. Process flow: inspect then paint then kitting then label then test then storage then prep. Equipment: 3 inspect stations, 1 paint station, 3 kitting stations, 1 label station, 1 test station, 1 storage station, 1 prep station. Demand is 33 units per hour. Power comes in at the east wall and water at the west wall. Put storage right beside the inbound dock.",
+        "firstCallValid": false,
+        "harnessValid": true,
+        "attempts": 2,
+        "firstErrors": [
+          "Dock 0 is blocked by a station",
+          "Dock 1 cannot be reached from the inbound dock",
+          "storage1 cannot be reached by forklift from the inbound dock"
+        ],
+        "gotStations": 11
+      },
+      {
+        "id": 8,
+        "stations": 12,
+        "floor": "14x10",
+        "text": "Plan 8. A workshop 14 m wide (east-west) by 10 m deep (north-south). Goods come in through a dock on the west wall and leave through a dock on the east wall. Process flow: assembly then prep then storage then paint then pack then inspect then test. Equipment: 2 assembly stations, 1 prep station, 3 storage stations, 1 paint station, 1 pack station, 2 inspect stations, 2 test stations. Demand is 24 units per hour. Power comes in at the south wall and water at the west wall. Line the stations along the walls.",
+        "firstCallValid": false,
+        "harnessValid": true,
+        "attempts": 3,
+        "firstErrors": [
+          "Aisle between asm1 and asm2 is 0.50 m; minimum is 1.2 m (or place them flush)",
+          "Aisle between asm1 and insp1 is 1.00 m; minimum is 1.2 m (or place them flush)",
+          "Aisle between asm2 and prep1 is 0.50 m; minimum is 1.2 m (or place them flush)"
+        ],
+        "gotStations": 12
+      },
+      {
+        "id": 9,
+        "stations": 13,
+        "floor": "13x9",
+        "text": "Plan 9. A workshop 13 m wide (east-west) by 9 m deep (north-south). Goods come in through a dock on the east wall and leave through a dock on the east wall. Process flow: storage then paint then inspect then prep then label then weld then assembly then kitting. Equipment: 2 storage stations, 2 paint stations, 1 inspect station, 1 prep station, 3 label stations, 1 weld station, 2 assembly stations, 1 kitting station. Demand is 43 units per hour. Power comes in at the south wall and water at the south wall. Group stations of the same type side by side.",
+        "firstCallValid": false,
+        "harnessValid": true,
+        "attempts": 2,
+        "firstErrors": [
+          "Aisle between prep1 and label1 is 1.00 m; minimum is 1.2 m (or place them flush)",
+          "Aisle between assembly2 and kitting1 is 1.00 m; minimum is 1.2 m (or place them flush)"
+        ],
+        "gotStations": 13
+      },
+      {
+        "id": 10,
+        "stations": 14,
+        "floor": "12x9",
+        "text": "Plan 10. A workshop 12 m wide (east-west) by 9 m deep (north-south). Goods come in through a dock on the west wall and leave through a dock on the west wall. Process flow: storage then label then prep then inspect then kitting then assembly then test then pack. Equipment: 1 storage station, 3 label stations, 1 prep station, 2 inspect stations, 4 kitting stations, 1 assembly station, 1 test station, 1 pack station. Demand is 29 units per hour. Power comes in at the south wall and water at the west wall. Put storage right beside the inbound dock.",
+        "firstCallValid": false,
+        "harnessValid": true,
+        "attempts": 2,
+        "firstErrors": [
+          "Aisle between label3 and test1 is 0.50 m; minimum is 1.2 m (or place them flush)"
+        ],
+        "gotStations": 14
+      }
+    ]
+  }
+}

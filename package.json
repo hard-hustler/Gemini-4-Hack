@@ -9,7 +9,8 @@
     "api": "tsx --env-file=.env server/index.ts",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval": "tsx --env-file=.env eval/run.ts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",

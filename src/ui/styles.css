@@ -148,3 +148,4 @@ button.rec { background: #7a231c; border-color: var(--warn); animation: pulse 1s
 .shop-option img { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; background: #fff; }
 .shop-option i { color: var(--muted); font-style: normal; }
 .proposal a { color: var(--accent); }
+.link { color: var(--accent); align-self: center; padding: 0 6px; }

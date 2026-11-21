@@ -34,7 +34,8 @@ Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
       station type, reads footprints from listing text, applies prices as
       `setParam` ops, and builds a per-seller cart of checkout links
       (`server/shop.ts`). Nothing is ordered.
-- [ ] Milestone 5: `/eval` (QAPLIB Nugent gap, validity rate, queue sanity).
+- [x] **Milestone 5**: `npm run eval` writes `public/eval/results.json`, shown
+      at `/eval/index.html`.
 
 ## How it fits together
 
@@ -62,6 +63,20 @@ shown, routed or simulated.
 | Managed Agent (`antigravity-preview-09-2026` on Hydrogen) | clones this repo into a sandbox and runs 8 seeded layout searches in parallel; results are re-validated and re-simulated locally | `server/agent.ts` |
 
 All calls go through `server/gemini.ts` (Interactions API and Decisions API over REST).
+
+## Eval results (run of 2026-11-21)
+
+| Check | One model call | Harness |
+| --- | --- | --- |
+| QAPLIB Nugent gap to best-known (nug12 / 15 / 20 / 30) | 18.3% / 36.5% / 8.0% / 13.4% | 0% / 0.9% / 1.3% / 1.6% |
+| Valid layouts on 10 unseen plans | 60% | 100% |
+
+Simulator vs M/M/c queue formula: within 4% in all four cases.
+
+Where it breaks: on QAP most of the harness gain comes from the local search,
+not the model (the same search from a random start reaches 0% / 1.4% / 2.3% / 2.8%).
+One "valid" plan came back with a different number of stations than the plan
+asked for: validate() checks geometry, not faithfulness to the input.
 
 ## Known rough edges
 

@@ -196,7 +196,7 @@ export function toOps(raw: any[]): EditOp[] {
 }
 
 /** Hydrogen: sketch photo or document -> FactorySpec, retried against validate(). */
-export async function readPlan(media: Block, hint?: string) {
+export async function readPlan(media: Block, hint?: string, maxAttempts = MAX_ATTEMPTS) {
   const system = `You read a factory floor plan (a photo of a hand-drawn sketch, or a document describing one) and emit a FactorySpec as JSON. Never describe the layout in prose.
 ${GEOMETRY_RULES}
 ${STATION_DEFAULTS}
@@ -207,7 +207,7 @@ Read dimensions written on the plan. If the floor size is not given, assume 20 m
   const attempts: Attempt[] = [];
   let lastErrors: ValidationError[] = [];
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const res = await interact<any>({ model: MODELS.hydrogen, input: steps, system, schema: planSchema, thinking: 'low' });
     const spec = normalise(res.json);
     lastErrors = validate(spec);
@@ -219,7 +219,7 @@ Read dimensions written on the plan. If the floor size is not given, assume 20 m
       content: [{ type: 'text', text: `That spec failed validation. Fix every error and emit the full corrected spec. Keep elements as close as possible to where they are drawn.\n${errorText(lastErrors)}` }],
     });
   }
-  throw new PipelineError(`No valid layout after ${MAX_ATTEMPTS} attempts`, attempts, lastErrors);
+  throw new PipelineError(`No valid layout after ${maxAttempts} attempts`, attempts, lastErrors);
 }
 
 /** Hydrogen: a typed or spoken instruction + the current spec -> edit ops, retried against validate(). */

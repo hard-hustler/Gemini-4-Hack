@@ -674,6 +674,9 @@ export default function App() {
             Compare
           </button>
           <button onClick={reset}>Reset</button>
+          <a className="link" href="/eval/index.html" target="_blank" rel="noreferrer">
+            Eval
+          </a>
         </div>
       </footer>
 
