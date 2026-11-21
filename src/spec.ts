@@ -121,6 +121,14 @@ export function snap(v: number, cell: number): number {
   return Math.round(v / cell) * cell;
 }
 
+/**
+ * A station's size on the floor grid: rounded UP to whole cells (at least one), so the space the layout
+ * reserves is never smaller than the real product the scene draws from its recipe.
+ */
+export function gridSize(v: number, cell: number): number {
+  return Math.max(cell, Math.ceil(v / cell - 1e-9) * cell);
+}
+
 /** Pure: returns a new spec. Throws on an op that cannot be applied at all (unknown id, bad path). */
 export function applyOp(spec: FactorySpec, op: EditOp): FactorySpec {
   const next: FactorySpec = structuredClone(spec);

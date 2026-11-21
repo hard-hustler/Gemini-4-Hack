@@ -41,6 +41,11 @@ export interface SceneProps {
   onSelectCharacter?: (role: CharacterRole) => void;
   onDrag?: (id: string, x: number, y: number) => void;
   onDrop?: (id: string) => void;
+  /** procurement add-on: an HTML drag of this dataTransfer type can land on the floor */
+  dropType?: string;
+  /** floor point under such a drag, or null when it leaves the floor */
+  onDragOverFloor?: (p: Point | null) => void;
+  onDropOnFloor?: (p: Point) => void;
 }
 
 type V3 = [number, number, number];
@@ -353,6 +358,56 @@ function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number
   return null;
 }
 
+/**
+ * Procurement add-on: lets an HTML drag (a Shop listing from the panel) land on the floor. Only drags of `type`
+ * are taken; the drop point is the cursor ray on the floor plane, in spec metres.
+ */
+function FloorDrop({ spec, type, onOver, onDrop }: { spec: FactorySpec; type: string; onOver?: (p: Point | null) => void; onDrop: (p: Point) => void }) {
+  const { camera, gl } = useThree();
+  const handlers = useRef({ onOver, onDrop });
+  handlers.current = { onOver, onDrop };
+  const { width, depth } = spec.floor;
+  useEffect(() => {
+    const el = gl.domElement;
+    const ray = new THREE.Raycaster();
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const hit = new THREE.Vector3();
+    const toFloor = (e: DragEvent): Point | null => {
+      const r = el.getBoundingClientRect();
+      ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+      if (!ray.ray.intersectPlane(plane, hit)) return null;
+      const p = { x: hit.x + width / 2, y: hit.z + depth / 2 };
+      return p.x >= 0 && p.y >= 0 && p.x <= width && p.y <= depth ? p : null;
+    };
+    const ours = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes(type);
+    const over = (e: DragEvent) => {
+      if (!ours(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'copy';
+      handlers.current.onOver?.(toFloor(e));
+    };
+    const leave = (e: DragEvent) => {
+      if (ours(e)) handlers.current.onOver?.(null);
+    };
+    const drop = (e: DragEvent) => {
+      if (!ours(e)) return;
+      e.preventDefault();
+      const p = toFloor(e);
+      if (p) handlers.current.onDrop(p);
+      else handlers.current.onOver?.(null);
+    };
+    el.addEventListener('dragover', over);
+    el.addEventListener('dragleave', leave);
+    el.addEventListener('drop', drop);
+    return () => {
+      el.removeEventListener('dragover', over);
+      el.removeEventListener('dragleave', leave);
+      el.removeEventListener('drop', drop);
+    };
+  }, [camera, gl, type, width, depth]);
+  return null;
+}
+
 function World({
   spec,
   routes,
@@ -372,6 +427,9 @@ function World({
   onSelectCharacter,
   onDrag,
   onDrop,
+  dropType,
+  onDragOverFloor,
+  onDropOnFloor,
 }: SceneProps) {
   const toWorld = useToWorld(spec);
   const tour = useTour(spec, routes);
@@ -443,6 +501,7 @@ function World({
       )}
       <OrbitControls makeDefault enableRotate={interactive} enablePan={interactive} enableZoom={interactive} maxPolarAngle={Math.PI / 2.15} minZoom={2} maxZoom={200} />
       <FitCamera spec={spec} insetRight={insetRight} />
+      {dropType && onDropOnFloor && <FloorDrop spec={spec} type={dropType} onOver={onDragOverFloor} onDrop={onDropOnFloor} />}
     </>
   );
 }

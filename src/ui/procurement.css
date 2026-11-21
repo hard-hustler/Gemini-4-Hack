@@ -1,0 +1,22 @@
+/* Procurement add-on. Uses the Dry Run tokens from theme.css only: no new colours or fonts, flat like the rest. */
+.fact-inputs input.proc-budget-input { width: 76px; }
+.fact-inputs input.proc-budget-input::placeholder { color: var(--line-2); }
+
+.proc-budget { display: flex; flex-direction: column; gap: 6px; }
+.proc-budget .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.proc-budget .bar i { display: block; height: 100%; background: var(--ink); border-radius: 2px; }
+.proc-budget .bar i.over { background: var(--warn); }
+
+.listing-body .proc-cost { display: inline-flex; gap: 6px; align-items: center; }
+.listing-body .proc-cost.over { color: var(--warn); }
+
+.proc-size { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; background: var(--stage); border: 1px solid var(--line-2); border-radius: 10px; }
+.proc-size > b { font-family: var(--display); font-size: 16px; }
+.proc-size-fields { display: flex; gap: 22px; flex-wrap: wrap; padding: 4px 0; }
+
+/* Add from Shop: draggable listings and the step picker */
+.proc-drag { cursor: grab; }
+.proc-drag:active { cursor: grabbing; }
+.proc-drag.off { opacity: 0.5; cursor: default; }
+.proc-step { display: flex; align-items: center; gap: 8px; }
+.proc-step select { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 8px; }

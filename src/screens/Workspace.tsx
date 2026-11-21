@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AdvocateFinding, AdvocateReport, AdvocateRole, CharacterRole, FixProposal, TraceEvent } from '../contracts';
+import type { AdvocateFinding, AdvocateReport, AdvocateRole, CharacterRole, FixProposal, ShopListing, TraceEvent } from '../contracts';
 import { ADVOCATE_CHARACTERS, ADVOCATE_ROLES, runDeterministicAdvocateAudit } from '../engines/advocate';
 import { compare, evaluate, makeVersion, type Version } from '../engines/versions';
 import { validate, type ValidationError } from '../engines/validate';
+import { budgetStatus, procurementSnapshot } from '../procurement';
 import { applyOp, type EditOp, type FactorySpec } from '../spec';
 import { api, apiStream, ApiError, money, num, type Project } from '../store';
 import { startRecording, type Recorder } from '../ui/audio';
 import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
 import { Icon } from '../ui/icons';
+import { BudgetMeter, ExportButton, ShopAttribution } from '../ui/Procurement';
 import { Scene, type Layers } from '../ui/Scene';
+import { AddToCartButton, ShopifyAttribution } from '../ui/Commerce';
+import { formatPrice, priceSubtotals, safeWebUrl } from '../commerce';
+import { AddFromShop } from '../ui/ShopDrop';
+import { SHOP_DRAG, useShopDrop } from '../ui/useShopDrop';
 
 type Goal = 'cost' | 'lead' | 'build';
 interface Deltas {
@@ -430,6 +436,8 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
       if (events.length) onChange({ trace: [...project.trace, ...events] });
     }
   };
+  // procurement add-on: Shop listings dragged onto the floor, checked by the same rules as any edit
+  const shop = useShopDrop({ draft, versionId: current.id, project, call, setDraft, setPreview, setRejected, setNotice, onChange });
 
   /** Every manual edit goes through here: apply the op, validate, accept or reject with the reasons. */
   const tryOp = (op: EditOp) => {
@@ -625,15 +633,27 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     </b>
   );
   const bill = useMemo(() => {
-    const map = new Map<string, { name: string; qty: number; price: number; checkoutUrl?: string; listingUrl?: string }>();
+    const catalog = new Map(project.equipment.map(({ item }) => [item.id, item] as const));
+    for (const item of project.shopItems ?? []) catalog.set(item.id, item);
+    const map = new Map<string, { name: string; qty: number; price: number; listing?: ShopListing; listingUrl?: string; checkoutUrl?: string }>();
     for (const s of draft.stations) {
       const key = s.catalogId ?? s.type;
-      const row = map.get(key) ?? { name: s.name ?? s.type, qty: 0, price: s.price, checkoutUrl: s.checkoutUrl, listingUrl: s.listingUrl };
+      const item = s.catalogId ? catalog.get(s.catalogId) : undefined;
+      const row = map.get(key) ?? {
+        name: s.name ?? s.type,
+        qty: 0,
+        price: s.price,
+        listing: item?.listing,
+        listingUrl: item?.listing?.url ?? s.listingUrl,
+        checkoutUrl: item?.listing?.checkoutUrl ?? s.checkoutUrl,
+      };
       row.qty++;
       map.set(key, row);
     }
     return [...map.values()];
-  }, [draft]);
+  }, [draft, project.equipment, project.shopItems]);
+  const billTotal = bill.reduce((t, r) => t + r.qty * r.price, 0);
+  const billBudget = budgetStatus(billTotal, project.budget);
   const cmpA = cmp && versions.find((v) => v.id === cmp.a);
   const cmpB = cmp && versions.find((v) => v.id === cmp.b);
   const outcomeIcon = { kept: 'check', simulated: 'minus', 'gated out': 'minus', rejected: 'x', vetoed: 'shield' } as const;
@@ -670,6 +690,9 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           onSelectCharacter={handleSelectCharacter}
           onDrag={onDrag}
           onDrop={onDrop}
+          dropType={SHOP_DRAG}
+          onDragOverFloor={shop.dragOver}
+          onDropOnFloor={shop.drop}
         />
       </div>
 
@@ -1097,33 +1120,45 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
           )}
 
           {tab === 'equipment' && (
+            <>
             <div className="section">
               {bill.map((r, i) => (
                 <div key={i} className="bill-row">
                   <span>
                     {r.qty} × {r.name}
                   </span>
-                  <span>{money(r.qty * r.price)}</span>
-                  {r.checkoutUrl || r.listingUrl ? (
-                    <a className="small" href={r.checkoutUrl ? r.checkoutUrl.replace(/:1(?=\?|$)/, `:${r.qty}`) : r.listingUrl} target="_blank" rel="noreferrer">
-                      {r.checkoutUrl ? 'Buy' : 'Listing'}
-                    </a>
-                  ) : (
-                    <span />
-                  )}
+                  <span>{r.listing ? formatPrice(r.listing, r.qty) : money(r.qty * r.price)}</span>
+                  {r.listing ? <AddToCartButton listing={r.listing} quantity={r.qty} /> : safeWebUrl(r.listingUrl) ? (
+                    <a className="small" href={safeWebUrl(r.listingUrl)} target="_blank" rel="noopener noreferrer">Listing</a>
+                  ) : <span />}
                 </div>
               ))}
               <div className="bill-row">
-                <b>Total</b>
-                <b>{money(bill.reduce((t, r) => t + r.qty * r.price, 0))}</b>
+                <b>Item totals</b>
+                <div className="bill-currency-totals">{priceSubtotals(bill.map((row) => ({ listing: row.listing, price: row.price, quantity: row.qty }))).map((subtotal) => <b key={subtotal.currency}>{formatPrice({ price: 0, ...subtotal })}{subtotal.estimated ? ' (includes estimates)' : ''}</b>)}</div>
                 <span />
               </div>
+              <p className="muted small">Simulation costs are planning estimates. Merchant totals stay in their original currencies; no currency conversion is applied. Review each merchant and approve checkout in your cart.</p>
+              <ShopifyAttribution />
+              {billBudget ? <BudgetMeter status={billBudget} /> : <span className="muted small">No budget set. Add one on the Equipment step.</span>}
+              {bill.some((r) => r.checkoutUrl || r.listing) && <ShopAttribution checkout />}
               <div className="row">
                 <button className="ghost sm" onClick={onPlan}>
                   Change equipment
                 </button>
+                <ExportButton
+                  filename={`procurement-${current.id}${dirty ? '-draft' : ''}.json`}
+                  snapshot={() => procurementSnapshot(draft, project.equipment, project.budget, dirty ? `${current.id} + unsaved edits` : current.id, project.shopItems)}
+                />
               </div>
             </div>
+            <AddFromShop
+              shop={shop}
+              defaultQuery={(type) => project.equipment.find((l) => l.stepType === type)?.item.name ?? shop.label(type)}
+              budgetAfter={(price) => budgetStatus(billTotal + price, project.budget)}
+              disabled={busy}
+            />
+            </>
           )}
 
           {tab === 'versions' && (

@@ -3,7 +3,7 @@
 // an invalid layout because no model produces coordinates.
 
 import type { EquipmentLine, Requirements } from '../contracts';
-import { dockPoint, footprint, snap, type FactorySpec, type Point, type Rect, type Station, type Wall } from '../spec';
+import { dockPoint, footprint, gridSize, snap, type FactorySpec, type Point, type Rect, type Station, type Wall } from '../spec';
 import { buildGrid, isFree, pointToCell } from './grid';
 import { route } from './route';
 import { localSearch } from './search';
@@ -47,8 +47,9 @@ function stationsFrom(req: Requirements, equipment: EquipmentLine[]): Station[] 
         type: step.type,
         x: 0,
         y: 0,
-        w: Math.max(CELL, snap(it.footprint.w, CELL)),
-        d: Math.max(CELL, snap(it.footprint.d, CELL)),
+        // rounded up, not to the nearest cell: the scene draws the real size, so the layout must reserve at least that
+        w: gridSize(it.footprint.w, CELL),
+        d: gridSize(it.footprint.d, CELL),
         rot: 0,
         cycleTimeSec: Math.max(1, it.cycleTimeSec),
         operators: it.operators,

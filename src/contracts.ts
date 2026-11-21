@@ -38,6 +38,8 @@ export interface CatalogItem {
   shape?: 'bench' | 'rack' | 'machine' | 'table' | 'conveyor';
   /** 0..1 from the Decisions API when specs were read off a listing */
   confidence?: number;
+  /** procurement add-on: where the footprint came from when it is a Shop item (stated in the listing, or checked by the user) */
+  sizeSource?: 'listing' | 'user';
 }
 
 /** Provenance of an agent-built model: what the inspector made of its render. */
@@ -87,6 +89,9 @@ export interface ShopListing {
   dims?: { w: number; d: number; text: string };
   /** plain-text description, trimmed; used to read specs */
   description?: string;
+  /** exact Shop ids, kept as returned for a later checkout (procurement add-on) */
+  productId?: string;
+  sellerDomain?: string;
 }
 
 /** One step of the process, in order. The model decides this; it never decides coordinates. */

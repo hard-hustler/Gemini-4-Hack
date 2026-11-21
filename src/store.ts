@@ -1,6 +1,6 @@
 // Client-side project store. No database: projects live in memory and localStorage.
 
-import type { EquipmentLine, Requirements, TraceEvent } from './contracts';
+import type { CatalogItem, EquipmentLine, Requirements, TraceEvent } from './contracts';
 import type { MachineModel } from './model3d';
 import type { Version } from './engines/versions';
 
@@ -17,6 +17,10 @@ export interface Project {
   currentId: string | null;
   /** agent-built models by catalog id, kept even after an item is replaced so old versions still draw */
   models?: Record<string, MachineModel>;
+  /** procurement add-on: equipment budget in dollars; unset means no budget */
+  budget?: number;
+  /** procurement add-on: Shop items dropped straight onto a layout, kept so the export has their exact ids */
+  shopItems?: CatalogItem[];
 }
 
 const KEY = 'dryrun.projects.v2';

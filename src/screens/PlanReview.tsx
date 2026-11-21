@@ -1,21 +1,29 @@
 import { useState } from 'react';
 import type { CatalogItem, EquipmentLine, ShopListing, TraceEvent } from '../contracts';
 import { evaluate, makeVersion } from '../engines/versions';
+import { budgetStatus, formatSize, itemFromListing, swapDelta, withSize, type Size } from '../procurement';
 import type { FactorySpec } from '../spec';
 import { api, apiStream, ApiError, money, pct, type Project } from '../store';
 import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
 import { Icon } from '../ui/icons';
 import { featureText } from '../machines';
+import { BudgetFact, BudgetMeter, ShopAttribution, SizeCheck, SwapCost } from '../ui/Procurement';
 import { MachineThumb } from '../ui/thumbs';
 import { Swarm } from './Swarm';
+import { CommerceDrawer, ShopifyAttribution, ShopProductCard } from '../ui/Commerce';
+import { formatPrice, priceSubtotals } from '../commerce';
 
 const WALL = { N: 'north', S: 'south', E: 'east', W: 'west' } as const;
 
-function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () => void; onPick: (item: CatalogItem, trace: TraceEvent[]) => void }) {
-  const [query, setQuery] = useState(line.item.name);
+type Pending = { listing: ShopListing; item?: CatalogItem; trace: TraceEvent[] };
+
+function Replace({ line, total, budget, onClose, onPick }: { line: EquipmentLine; total: number; budget?: number; onClose: () => void; onPick: (item: CatalogItem, trace: TraceEvent[]) => void }) {
+  const initialQuery = line.item.listing?.currency && line.item.listing.currency !== 'USD' ? 'heavy duty steel shelving rack' : line.item.name;
+  const [query, setQuery] = useState(initialQuery);
   const [listings, setListings] = useState<ShopListing[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
 
   const search = async () => {
     setBusy('search');
@@ -30,28 +38,28 @@ function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () =
   const use = async (l: ShopListing) => {
     setBusy(l.variantId);
     setError(null);
+    setPending(null);
     try {
       const step = { type: line.stepType, label: line.label, cycleTimeSec: line.item.cycleTimeSec, operators: line.item.operators };
-      const out = await apiStream<{ item: CatalogItem; trace: TraceEvent[] }>('/api/catalog/convert', { listing: l, step }, () => undefined);
-      onPick(out.item, out.trace);
+      const out = await apiStream<{ item: CatalogItem; dimsStated?: boolean; trace: TraceEvent[] }>('/api/catalog/convert', { listing: l, step }, () => undefined);
+      if (out.dimsStated === false) {
+        setPending({ listing: l, item: out.item, trace: out.trace });
+        setBusy(null);
+      } else onPick(out.dimsStated ? { ...out.item, sizeSource: 'listing' } : out.item, out.trace);
     } catch (e) {
       setError((e as Error).message);
+      setPending({ listing: l, trace: [] });
       setBusy(null);
     }
   };
+  const confirmSize = (p: Pending, size: Size) =>
+    p.item
+      ? onPick(withSize(p.item, size), [...p.trace, { stage: 'check', actor: 'shop', title: 'You checked the size', detail: `${formatSize(size)}; the listing did not state one`, ms: 0, status: 'ok' }])
+      : onPick(itemFromListing(p.listing, line, size), [{ stage: 'convert', actor: 'shop', title: 'Specs entered by hand', detail: `${formatSize(size)} from you; time, staff, power and water kept from ${line.item.name}`, ms: 0, status: 'retry' }]);
 
   return (
-    <div className="scrim" onClick={onClose}>
-      <aside className="drawer" onClick={(e) => e.stopPropagation()} aria-label="Replace equipment">
-        <header>
-          <div>
-            <span className="muted small">Replace the equipment for</span>
-            <h2>{line.label}</h2>
-          </div>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
-            <Icon name="x" />
-          </button>
-        </header>
+    <CommerceDrawer title={`Replace ${line.label}`} onClose={onClose}>
+        <ShopifyAttribution />
         <form
           className="search"
           onSubmit={(e) => {
@@ -59,46 +67,38 @@ function Replace({ line, onClose, onPick }: { line: EquipmentLine; onClose: () =
             void search();
           }}
         >
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="steel workbench" aria-label="Search Shop" autoFocus />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="steel workbench" aria-label="Search Shop" maxLength={200} />
           <button className="primary" disabled={!!busy || !query.trim()}>
             {busy === 'search' ? 'Searching' : 'Search Shop'}
           </button>
         </form>
+        {listings !== null && <ShopAttribution />}
         {error && <Notice tone="error" title={error} />}
+        {pending && (
+          <SizeCheck
+            key={pending.listing.variantId}
+            listing={pending.listing}
+            initial={pending.item ? pending.item.footprint : pending.listing.dims}
+            reason={
+              pending.item
+                ? 'The listing does not state a size, so this one is estimated. Check it against the seller’s page.'
+                : `The specs could not be read automatically. Enter the size from the listing; time, staff, power and water stay as for ${line.item.name}.`
+            }
+            onCancel={() => setPending(null)}
+            onConfirm={(size) => confirmSize(pending, size)}
+          />
+        )}
         {listings === null && !busy && <p className="muted">Choosing a listing reads its size and power from the listing text and checks that it suits this step.</p>}
         {listings?.length === 0 && <p className="muted">Nothing found for that search.</p>}
         <div>
-          {listings?.map((l) => (
-            <div key={l.variantId} className="listing">
-              {l.image ? <img src={l.image} alt="" /> : <div className="listing-blank" />}
-              <div className="listing-body">
-                <b>{l.title.slice(0, 84)}</b>
-                <span>
-                  {l.seller}
-                  {l.rating ? ` · rated ${l.rating}` : ''}
-                  {l.dims ? ` · ${l.dims.w} × ${l.dims.d} m` : ''}
-                </span>
-                <div className="listing-foot">
-                  <strong>{money(l.price)}</strong>
-                  <a className="small" href={l.url} target="_blank" rel="noreferrer">
-                    Listing
-                  </a>
-                  <button className="ghost sm" disabled={!!busy} onClick={() => void use(l)}>
-                    {busy === l.variantId ? (
-                      <>
-                        <span className="spinner ink" /> Reading specs
-                      </>
-                    ) : (
-                      'Use this'
-                    )}
-                  </button>
-                </div>
-              </div>
+          {listings?.map((listing) => (
+            <div key={listing.variantId}>
+              <ShopProductCard listing={listing} busy={!!busy} onUse={(chosen) => void use(chosen)} />
+              <SwapCost delta={swapDelta(line, listing)} qty={line.qty} after={budgetStatus(total + swapDelta(line, listing), budget)} />
             </div>
           ))}
         </div>
-      </aside>
-    </div>
+    </CommerceDrawer>
   );
 }
 
@@ -141,6 +141,9 @@ export function PlanReview({
   const req = project.requirements;
   const lines = project.equipment;
   const total = lines.reduce((t, l) => t + l.qty * l.item.price, 0);
+  const totalText = priceSubtotals(lines.map((line) => ({ listing: line.item.listing, price: line.item.price, quantity: line.qty })))
+    .map((subtotal) => `${formatPrice({ price: 0, ...subtotal })}${subtotal.estimated ? ' (includes estimates)' : ''}`).join(' + ') || 'USD 0.00';
+  const budget = budgetStatus(total, project.budget);
   const stations = lines.reduce((t, l) => t + l.qty, 0);
   const doubtful = lines.filter((l) => l.inBrief !== undefined && l.inBrief < 0.5);
   const checked = lines.some((l) => l.inBrief !== undefined);
@@ -196,6 +199,7 @@ export function PlanReview({
                 an hour
               </span>
             </label>
+            <BudgetFact budget={project.budget} onChange={(value) => onChange({ budget: value })} />
             <div className="fact">
               <span>Receiving</span>
               <b>{WALL[req.dockIn]} wall</b>
@@ -320,6 +324,13 @@ export function PlanReview({
               </div>
 
               <aside className="pd-side">
+                {budget && (
+                  <details open>
+                    <summary>Budget</summary>
+                    <BudgetMeter status={budget} />
+                    <p className="muted small">Listing prices; shipping and tax are finalized by the merchant.</p>
+                  </details>
+                )}
                 {req.research && (
                   <details open>
                     <summary>Research</summary>
@@ -365,7 +376,7 @@ export function PlanReview({
 
         <footer className="pd-foot">
           <span className="num">
-            {stations} stations · {money(total)}
+            {stations} stations · {totalText}
           </span>
           <RunStatus state={run} />
           <div className="pd-actions" ref={setActionsHost}>
@@ -386,6 +397,8 @@ export function PlanReview({
       {replacing !== null && (
         <Replace
           line={lines[replacing]}
+          total={total}
+          budget={project.budget}
           onClose={() => setReplacing(null)}
           onPick={(item, trace) => {
             onChange({ equipment: lines.map((l, k) => (k === replacing ? { ...l, item } : l)), trace: [...project.trace, ...trace] });
