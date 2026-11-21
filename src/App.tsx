@@ -241,6 +241,12 @@ export default function App() {
       setProposal(await api<Proposal>('/api/optimise', { spec: draft }));
     });
 
+  /** A managed agent runs the seeded search in parallel in its sandbox; the server re-checks every result. */
+  const deepSearch = () =>
+    run('Managed agent is searching in its sandbox (about a minute)', async () => {
+      setProposal(await api<Proposal>('/api/deep-search', { spec: draft }));
+    });
+
   const applyCandidate = (c: Candidate) => {
     if (!c.spec) return;
     const errs = validate(c.spec);
@@ -417,6 +423,9 @@ export default function App() {
           <button className="primary" disabled={!!busy} onClick={() => void improve()}>
             Improve with Neon
           </button>
+          <button disabled={!!busy} onClick={() => void deepSearch()}>
+            Deep search (Managed Agent)
+          </button>
         </div>
         <div className="group">
           <span className="group-title">Layers</span>
@@ -474,7 +483,7 @@ export default function App() {
       {proposal && (
         <aside className="proposal">
           <header>
-            <b>Neon's read</b>
+            <b>Proposals</b>
             <button onClick={() => setProposal(null)}>Close</button>
           </header>
           <p>{proposal.explanation}</p>

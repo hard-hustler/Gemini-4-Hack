@@ -2,6 +2,7 @@
 import express, { type Response } from 'express';
 import type { FactorySpec } from '../src/spec';
 import { GeminiError, MODELS, type Block } from './gemini';
+import { deepSearch } from './agent';
 import { optimise } from './optimize';
 import { editPlan, PipelineError, readPlan, scoreElements } from './pipeline';
 
@@ -71,6 +72,17 @@ app.post('/api/optimise', async (req, res) => {
     const { spec } = req.body as { spec: FactorySpec };
     if (!spec) return void res.status(400).json({ error: 'spec is required' });
     res.json(await optimise(spec));
+  } catch (e) {
+    fail(res, e);
+  }
+});
+
+// Managed agent runs the layout search in parallel in a sandbox; results are re-checked here.
+app.post('/api/deep-search', async (req, res) => {
+  try {
+    const { spec } = req.body as { spec: FactorySpec };
+    if (!spec) return void res.status(400).json({ error: 'spec is required' });
+    res.json(await deepSearch(spec));
   } catch (e) {
     fail(res, e);
   }

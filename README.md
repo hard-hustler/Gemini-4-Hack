@@ -56,6 +56,7 @@ shown, routed or simulated.
 | `gemini-decision-1` | per-element confidence: is the thing we read really a station / dock? | `server/pipeline.ts` `scoreElements` |
 | `gemini-4-neon` | bottleneck explanation and candidate improvement ops | `server/optimize.ts` |
 | `gemini-decision-1` | cheap gate: score each candidate before simulation | `server/optimize.ts` |
+| Managed Agent (`antigravity-preview-09-2026` on Hydrogen) | clones this repo into a sandbox and runs 8 seeded layout searches in parallel; results are re-validated and re-simulated locally | `server/agent.ts` |
 
 All calls go through `server/gemini.ts` (Interactions API and Decisions API over REST).
 
