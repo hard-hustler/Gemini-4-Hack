@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { buildParts, defaultRecipe, TONE_HEX, type MachineRecipe, type Part } from '../machines';
 import type { MachineModel } from '../model3d';
 import { ModelMesh } from './ModelMesh';
+import { LiteMachine } from './Plant';
 
 /** Edge lines keep same-coloured parts apart: an all-black cart still reads as a cart. */
 const EDGE: Record<string, string> = { ink: '#5d6266', bone: '#cfc6b4', steel: '#9a9d9f', wood: '#b8946a', orange: '#b9631c', red: '#a43b2a', green: '#35775a', blue: '#40699f', yellow: '#b98f2b', glass: '#7d99ad' };
@@ -87,6 +88,7 @@ export function Equipment({
   h,
   modelUrl,
   animate = true,
+  lite = false,
 }: {
   type: string;
   shape?: string;
@@ -98,9 +100,11 @@ export function Equipment({
   h: number;
   modelUrl?: string;
   animate?: boolean;
+  /** plant-scale drawing: parts merged per material, no moving parts, no edge lines */
+  lite?: boolean;
 }) {
   const built = useMemo(() => recipe ?? defaultRecipe(type, { w, d, h }, shape), [recipe, type, shape, w, d, h]);
-  const drawn = model ? <ModelMesh model={model} animate={animate} /> : <Machine recipe={built} />;
+  const drawn = lite ? <LiteMachine recipe={model ? undefined : built} model={model} /> : model ? <ModelMesh model={model} animate={animate} /> : <Machine recipe={built} />;
   if (!modelUrl) return drawn;
   return (
     <Fallback fallback={drawn}>

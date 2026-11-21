@@ -324,6 +324,15 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
   //    tried turned a quarter (rows running north-south). The shortest forklift tour of the first
   //    style that fits wins.
   const styles: RowStyle[] = [
+    // a plant gets wide conveyor aisles before anything tighter is tried
+    ...(large
+      ? [
+          { margin: 8, gap: 5, aisle: 12, bank: false, paired: false, greedy: false },
+          { margin: 6, gap: 4, aisle: 9, bank: false, paired: false, greedy: false },
+          { margin: 4, gap: 3, aisle: 6, bank: false, paired: false, greedy: false },
+          { margin: 3, gap: 2, aisle: 4, bank: true, paired: false, greedy: false },
+        ]
+      : []),
     { margin: 1.5, gap: 1.5, aisle: 2.5, bank: false, paired: false, greedy: false },
     { margin: 1.5, gap: 1.5, aisle: 2, bank: false, paired: false, greedy: false },
     { margin: 1, gap: 1.5, aisle: 1.5, bank: false, paired: false, greedy: false },

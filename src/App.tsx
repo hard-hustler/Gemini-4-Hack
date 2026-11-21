@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Catalog } from './screens/Catalog';
-import { demoProject, Landing } from './screens/Landing';
+import { Home } from './screens/Home';
+import { demoProject } from './screens/Landing';
 import { NewProject } from './screens/NewProject';
 import { PlanReview } from './screens/PlanReview';
 import { Workspace } from './screens/Workspace';
@@ -42,7 +43,7 @@ export default function App() {
     screen = <Workspace key={project.id} project={project} onHome={home} onPlan={() => setRoute({ name: 'plan', id: project.id })} onChange={(patch) => update(project.id, patch)} />;
   } else {
     screen = (
-      <Landing
+      <Home
         projects={projects}
         onNew={() => setRoute({ name: 'new' })}
         onCatalog={() => setRoute({ name: 'catalog' })}

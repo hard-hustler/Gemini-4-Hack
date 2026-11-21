@@ -46,8 +46,9 @@ const stepSchema = {
     needsWater: { type: 'boolean' },
     w: { type: 'number', description: 'rough station width in metres' },
     d: { type: 'number', description: 'rough station depth in metres' },
+    zone: { type: 'string', description: 'the department this step belongs to, e.g. "Body shop". One short name; the same for every step of that department. Empty for a single workshop.' },
   },
-  required: ['type', 'label', 'count', 'cycleTimeSec', 'operators', 'powerKw', 'needsWater', 'w', 'd'],
+  required: ['type', 'label', 'count', 'cycleTimeSec', 'operators', 'powerKw', 'needsWater', 'w', 'd', 'zone'],
 };
 
 const requirementsSchema = {
@@ -62,6 +63,7 @@ const requirementsSchema = {
     dockOut: { type: 'string', enum: WALLS },
     powerWall: { type: 'string', enum: WALLS },
     waterWall: { type: 'string', enum: WALLS },
+    transport: { type: 'string', enum: ['forklift', 'conveyor'], description: 'how units move between steps: forklift in a workshop, conveyor on a production line or plant' },
     sketch: {
       type: 'array',
       description: 'ONLY if the brief includes a drawing of the floor: one entry per drawn station, its centre as a fraction of floor width (fx, 0 = west) and depth (fy, 0 = north). Otherwise empty.',
@@ -69,7 +71,7 @@ const requirementsSchema = {
     },
     assumptions: { type: 'array', items: { type: 'string' }, description: 'each thing you had to assume because the brief did not say' },
   },
-  required: ['name', 'summary', 'floor', 'demandPerHour', 'steps', 'dockIn', 'dockOut', 'powerWall', 'waterWall', 'sketch', 'assumptions'],
+  required: ['name', 'summary', 'floor', 'demandPerHour', 'steps', 'dockIn', 'dockOut', 'powerWall', 'waterWall', 'transport', 'sketch', 'assumptions'],
 };
 
 const PLAN_SYSTEM = `You are the planner in a factory-planning harness. You read a brief (text, photos of sketches, documents, voice notes) for a small light-manufacturing workshop and emit its requirements as JSON.
@@ -78,6 +80,18 @@ Station counts: if the brief gives a count for a step, use exactly that count, e
 Typical cycle times (s): storage 20, kitting 50, prep 80, assembly 200, weld 150, paint 180, test 90, inspect 60, label 30, pack 70. Typical station footprint is 2 to 3 m wide by 1 to 2 m deep.
 If the brief gives no floor size, choose one that fits the equipment with room for 1.2 m aisles (roughly five times the total equipment footprint) and say so in assumptions. North is the top of any drawing.
 If the brief does not say where docks or utilities are, pick sensible walls and list each as an assumption. Do not invent steps the brief does not ask for or imply.`;
+
+/** Added to the planner's instructions when the brief is a production line or a whole plant. */
+const PLANT_SYSTEM = `
+This brief is for a large operation, not a workshop. Plan it as a plant:
+- Use the research notes. They say how this product is really made; follow their departments and steps rather than guessing.
+- Group the steps into departments with the "zone" field, in the order material flows through them (for a car plant: Stamping, Body shop, Paint shop, General assembly, Final inspection). Every step has a zone.
+- Use 14 to 30 steps in total. Each step is one kind of station; "type" is one unique lowercase word made of letters (bodyframing, ecoat, marriage), and "label" is the human name.
+- Size each step by takt: count = ceil(demandPerHour * cycleTimeSec / 3600 / 0.85), between 1 and 40. Slow processes (ovens, curing, framing) need many stations in parallel; fast ones need one or two.
+- Give each step a realistic single-station footprint (w, d up to 12 m) and power draw from the research.
+- transport is "conveyor".
+- Choose a floor that holds everything with aisles: about six times the total equipment footprint, wider than deep (for example 180 by 100 m), and say so in assumptions.
+- sketch is empty.`;
 
 function clean(raw: any): Requirements {
   const num = (v: unknown, f: number) => (typeof v === 'number' && Number.isFinite(v) ? v : f);
@@ -104,6 +118,7 @@ function clean(raw: any): Requirements {
       needsWater: Boolean(s?.needsWater),
       w: num(s?.w, 2),
       d: num(s?.d, 1),
+      zone: typeof s?.zone === 'string' && s.zone.trim() ? s.zone.trim().slice(0, 40) : undefined,
     });
   }
   return {
@@ -116,6 +131,7 @@ function clean(raw: any): Requirements {
     dockOut: wall(raw?.dockOut, 'E'),
     powerWall: wall(raw?.powerWall, 'N'),
     waterWall: wall(raw?.waterWall, 'S'),
+    transport: raw?.transport === 'conveyor' ? 'conveyor' : 'forklift',
     sketch: (Array.isArray(raw?.sketch) ? raw.sketch : [])
       .map((h: any) => ({ type: String(h?.type ?? '').toLowerCase().replace(/[^a-z0-9]/g, ''), fx: num(h?.fx, 0.5), fy: num(h?.fy, 0.5) }))
       .filter((h: { type: string; fx: number; fy: number }) => seen.has(h.type) && h.fx >= 0 && h.fx <= 1 && h.fy >= 0 && h.fy <= 1),
@@ -127,10 +143,13 @@ function clean(raw: any): Requirements {
 export function checkRequirements(r: Requirements): string[] {
   const errs: string[] = [];
   if (!r.steps.length) errs.push('steps is empty: list the process steps in order');
-  if (!(r.floor.width >= 4 && r.floor.width <= 200 && r.floor.depth >= 4 && r.floor.depth <= 200)) errs.push(`floor ${r.floor.width} x ${r.floor.depth} m is not a plausible workshop floor (each side 4 to 200 m)`);
+  if (!(r.floor.width >= 4 && r.floor.width <= 600 && r.floor.depth >= 4 && r.floor.depth <= 600)) errs.push(`floor ${r.floor.width} x ${r.floor.depth} m is not a plausible floor (each side 4 to 600 m)`);
+  if (r.steps.length > 40) errs.push(`${r.steps.length} steps is more than 40: merge closely related steps`);
+  const stations = r.steps.reduce((t, s) => t + Math.max(0, s.count), 0);
+  if (stations > 180) errs.push(`${stations} stations in total is more than 180: raise cycle-time assumptions or merge steps so counts come down`);
   if (!(r.demandPerHour > 0 && r.demandPerHour <= 2000)) errs.push(`demandPerHour ${r.demandPerHour} must be between 1 and 2000`);
   for (const s of r.steps) {
-    if (!(s.count >= 1 && s.count <= 12)) errs.push(`step "${s.type}": count ${s.count} must be 1 to 12`);
+    if (!(s.count >= 1 && s.count <= 40)) errs.push(`step "${s.type}": count ${s.count} must be 1 to 40`);
     if (!(s.cycleTimeSec > 0)) errs.push(`step "${s.type}": cycleTimeSec must be positive`);
     if (!(s.w >= 0.5 && s.w <= 12 && s.d >= 0.5 && s.d <= 12)) errs.push(`step "${s.type}": footprint ${s.w} x ${s.d} m is not plausible (0.5 to 12 m per side)`);
   }
@@ -165,19 +184,83 @@ export async function planProject(text: string, files: BriefFile[], emit?: Emit)
   if (!brief.length) throw new Error('The brief is empty');
   const kinds = [text.trim() ? 'text' : '', ...new Set(files.map((f) => f.mimeType.split('/')[0]))].filter(Boolean).join(', ');
 
-  const steps: Step[] = [{ type: 'user_input', content: [...brief, { type: 'text', text: 'Emit the requirements for this brief.' }] }];
+  // SCOPE: how big is this? A workshop goes straight to planning. A line or a plant gets researched first,
+  // because one model call from memory plans a car factory about as well as a person would from memory.
+  let scale: 'workshop' | 'line' | 'plant' = 'workshop';
+  try {
+    running('read', 'decisions', 'Sizing up the brief');
+    const d = await decide(brief, {
+      scale: {
+        type: 'choice',
+        instructions: 'The input is a brief for something to be manufactured. How large an operation does it describe?',
+        criteria: {
+          workshop: 'a single room or small workshop: roughly 15 stations or fewer, one team',
+          line: 'one production line: roughly 15 to 40 stations, a product moving along it',
+          plant: 'a whole factory with several departments, such as a car plant or an appliance factory',
+        },
+      },
+    });
+    const a = d.answers.scale;
+    if (a?.type === 'choice' && (a.choice === 'line' || a.choice === 'plant') && a.confidence >= 0.5) scale = a.choice;
+    log({ stage: 'read', actor: 'decisions', title: `Sized the brief as a ${scale}`, detail: a?.type === 'choice' ? `${Math.round(a.confidence * 100)}% sure` : undefined, ms: d.ms, status: 'ok' });
+  } catch (e) {
+    log({ stage: 'read', actor: 'decisions', title: 'Could not size the brief; planning it as a workshop', detail: (e as Error).message, ms: 0, status: 'fail' });
+  }
+  const large = scale !== 'workshop';
+
+  // RESEARCH: grounded in web search, so the plan follows how the product is really made.
+  let research: Requirements['research'];
+  if (large) {
+    running('research', 'hydrogen', 'Researching how this is made');
+    try {
+      const res = await interact({
+        model: MODELS.hydrogen,
+        input: [
+          ...brief,
+          {
+            type: 'text',
+            text: `Research how the product in this brief is manufactured at the scale described, using web search. Write working notes for a factory planner, in plain text, under 450 words:
+1. The departments, in the order material flows through them.
+2. For each department: its process steps in order, the equipment each step uses, a typical cycle time per unit at one station (seconds), a typical single-station footprint (metres), and power draw (kW).
+3. How units move between steps (conveyor types, AGVs, overhead carriers).
+4. Typical output per hour and floor area for a plant of this kind.
+Take every number you can from the search results, and say "estimate" where you had to estimate.`,
+          },
+        ],
+        tools: [{ type: 'google_search' }],
+        thinking: 'low',
+      });
+      research = { summary: res.text.trim(), sources: res.sources.slice(0, 12), queries: res.queries.slice(0, 8) };
+      log({
+        stage: 'research',
+        actor: 'hydrogen',
+        title: `Researched the process: ${research.sources.length} source${research.sources.length === 1 ? '' : 's'}`,
+        detail: research.queries.length ? `searched: ${research.queries.slice(0, 4).join('; ')}` : `${research.summary.split(/\s+/).length} words of notes`,
+        ms: res.ms,
+        status: research.sources.length ? 'ok' : 'retry',
+      });
+    } catch (e) {
+      log({ stage: 'research', actor: 'hydrogen', title: 'Research failed; planning from the brief alone', detail: (e as Error).message, ms: 0, status: 'fail' });
+    }
+  }
+  const evidence: Block[] = research ? [...brief, { type: 'text', text: `\nResearch notes on how this is made:\n${research.summary}\n` }] : brief;
+  const system = large ? PLAN_SYSTEM + PLANT_SYSTEM : PLAN_SYSTEM;
+
+  const steps: Step[] = [{ type: 'user_input', content: [...evidence, { type: 'text', text: 'Emit the requirements for this brief.' }] }];
   let req: Requirements | null = null;
   let errs: string[] = [];
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     running(attempt === 1 ? 'read' : 'plan', 'hydrogen', attempt === 1 ? 'Reading the brief' : 'Revising the plan');
-    const res = await interact<any>({ model: MODELS.hydrogen, input: steps, system: PLAN_SYSTEM, schema: requirementsSchema, thinking: 'low' });
+    const res = await interact<any>({ model: MODELS.hydrogen, input: steps, system, schema: requirementsSchema, thinking: large ? 'medium' : 'low', maxOutputTokens: 30000 });
     const candidate = clean(res.json);
+    if (large) candidate.transport = 'conveyor';
+    candidate.research = research;
     errs = checkRequirements(candidate);
     log({
       stage: attempt === 1 ? 'read' : 'plan',
       actor: 'hydrogen',
-      title: attempt === 1 ? `Read the brief (${kinds})` : `Revised the plan (attempt ${attempt})`,
-      detail: errs.length ? errs.join('; ') : `${candidate.steps.length} steps, ${candidate.steps.reduce((t, s) => t + s.count, 0)} stations, ${candidate.floor.width} x ${candidate.floor.depth} m`,
+      title: attempt === 1 ? (large ? `Planned the ${scale}` : `Read the brief (${kinds})`) : `Revised the plan (attempt ${attempt})`,
+      detail: errs.length ? errs.join('; ') : `${candidate.steps.length} steps${large ? ` in ${new Set(candidate.steps.map((x) => x.zone)).size} departments` : ''}, ${candidate.steps.reduce((t, s) => t + s.count, 0)} stations, ${candidate.floor.width} x ${candidate.floor.depth} m`,
       ms: res.ms,
       status: errs.length ? 'retry' : 'ok',
     });
@@ -207,10 +290,10 @@ export async function planProject(text: string, files: BriefFile[], emit?: Emit)
     try {
       const questions: Record<string, Question> = {};
       equipment.forEach((l, i) => {
-        questions[`s${i}`] = { type: 'noul', instructions: `The input is a brief for a small factory or workshop. Does the brief ask for, show, or clearly imply a "${l.label}" (${l.stepType}) step in the process?` };
+        questions[`s${i}`] = { type: 'noul', instructions: `The input is a brief for a factory or workshop, with research notes where the project is large. Does the brief ask for, show, or clearly imply a "${l.label}" (${l.stepType}) step in the process?` };
         questions[`n${i}`] = {
           type: 'choice',
-          instructions: `The input is a brief for a small factory or workshop. A planner decided the workshop needs ${l.qty} "${l.label}" (${l.stepType}) station${l.qty > 1 ? 's' : ''}. What does the brief itself say about how many of these there are?`,
+          instructions: `The input is a brief for a factory or workshop, with research notes where the project is large. A planner decided the workshop needs ${l.qty} "${l.label}" (${l.stepType}) station${l.qty > 1 ? 's' : ''}. What does the brief itself say about how many of these there are?`,
           criteria: {
             agrees: `the brief states or shows exactly ${l.qty}`,
             differs: `the brief states or shows a different number than ${l.qty}`,
@@ -220,11 +303,11 @@ export async function planProject(text: string, files: BriefFile[], emit?: Emit)
       });
       questions.coverage = {
         type: 'score',
-        instructions: `The input is a brief for a small factory or workshop. A planner read it and listed these process steps, in order: ${req.steps.map((s) => `${s.count} x ${s.label}`).join(', ')}. How completely and faithfully does that list cover the process the brief describes?`,
+        instructions: `The input is a brief for a factory or workshop, with research notes where the project is large. A planner read it and listed these process steps, in order: ${req.steps.map((s) => `${s.count} x ${s.label}`).join(', ')}. How completely and faithfully does that list cover the process the brief describes?`,
         criteria: ['misses most of what the brief asks for', 'misses or invents several steps', 'roughly right with one clear gap or extra', 'covers the brief with minor differences', 'covers everything the brief asks for and nothing else'],
       };
       running('check', 'decisions', 'Checking the plan against the brief');
-      const d = await decide(brief, questions);
+      const d = await decide(evidence, questions);
       equipment.forEach((l, i) => {
         const a = d.answers[`s${i}`];
         if (a?.type === 'noul') l.inBrief = a.noul;
@@ -252,8 +335,10 @@ export async function planProject(text: string, files: BriefFile[], emit?: Emit)
     steps.push({ type: 'user_input', content: [{ type: 'text', text: `An independent check against the brief found these problems. Fix them, change nothing else, and emit the full requirements again.\n${contradicted.map((c) => `- ${c}`).join('\n')}` }] });
     try {
       running('plan', 'hydrogen', 'Revising the plan after the check');
-      const res = await interact<any>({ model: MODELS.hydrogen, input: steps, system: PLAN_SYSTEM, schema: requirementsSchema, thinking: 'low' });
+      const res = await interact<any>({ model: MODELS.hydrogen, input: steps, system, schema: requirementsSchema, thinking: large ? 'medium' : 'low', maxOutputTokens: 30000 });
       const revised = clean(res.json);
+      if (large) revised.transport = 'conveyor';
+      revised.research = research;
       const bad = checkRequirements(revised);
       log({ stage: 'plan', actor: 'hydrogen', title: 'Revised the plan after the check', detail: bad.length ? `revision rejected, keeping the first plan: ${bad.join('; ')}` : revised.steps.map((s) => `${s.count} x ${s.label}`).join(', '), ms: res.ms, status: bad.length ? 'fail' : 'ok' });
       if (bad.length) break;

@@ -54,6 +54,33 @@ little once a search ran. So the model decides what goes on the floor and code
 decides where. The Decisions check can also send a station count that
 contradicts the brief back to the planner for one revision.
 
+## Plant scale
+
+A brief is sized first (Decisions API: workshop, line or plant). A line or a
+plant takes a different path through the harness:
+
+- **Research.** Hydrogen with Google Search grounding looks up how the product
+  is really made (departments, steps, cycle times, footprints, power) and
+  writes notes the planner then follows. The queries and sources are shown on
+  the Equipment screen.
+- **Zoned plan.** Steps are grouped into departments and sized by takt, up to
+  40 steps and 180 stations.
+- **Engines.** A 1 m grid on large floors, each station routed to its nearest
+  station of the next step instead of all pairs, and a placer that leaves
+  conveyor aisles. A 111-station plant that used to fail after 22 s now places
+  in 76 ms, routes in 52 ms and simulates in 0.24 s.
+- **Conveyors.** Transport is by conveyor instead of forklift: units move
+  continuously with no carrier to wait for, and conveyor length is costed.
+  The scene draws the belts with product riding on them.
+- **Equipment.** Shop does not sell paint ovens, so the swarm designs each
+  machine from what its step does, with the same structural check and
+  inspection. Machines on a plant are merged into a few meshes each.
+
+Tested on "a car assembly plant that builds 30 compact electric cars an hour":
+sized as a plant, researched, planned as 20 steps in 5 departments (60
+stations, 180 x 120 m), every machine designed by the swarm (54 to 101 parts
+each), simulated at 27.9 cars an hour against 30.
+
 ## Machine catalog
 
 A machine is a recipe, not a mesh (`src/machines.ts`): one of 12 archetypes
@@ -161,6 +188,10 @@ Where it breaks, and what the numbers do not show:
 - A plan can still be valid but unfaithful (wrong station count). The
   Decisions check on the Equipment screen flags doubtful steps but does not
   block.
+- Designing 20 plant machines took 7.5 minutes in the one full run; the limit was
+  since lowered to two inspection rounds and eight agents at once, untested at that size.
+- On a plant, research sometimes returns notes with no cited sources.
+- The improve loop has not been tried on a plant; its seeded search skips large floors.
 - An improve run takes about two minutes (three rounds, 30 to 40 s per Neon call).
 - The microphone path was tested in the browser with a synthetic audio stream, not a physical mic.
 - The sim charges forklift time only for loaded travel, and aisle width is not

@@ -553,6 +553,16 @@ export function defaultRecipe(type: string, size: { w: number; d: number; h: num
       const words = `${type} ${hint ?? ''}`.toLowerCase();
       const has = (...keys: string[]) => keys.some((k) => words.includes(k));
       const tall = (min: number) => ({ size: { ...size, h: Math.max(size.h, min) } });
+      // Plant-sized equipment: the bench and press archetypes are built for a few metres, so
+      // anything bigger is drawn as a housed machine or a work bay, which scale cleanly.
+      if (size.w > 4.5 || size.d > 4.5) {
+        const big = tall(clamp(Math.min(size.w, size.d) * 0.5, 2.8, 4.5));
+        if (has('paint', 'coat', 'booth', 'oven', 'cure', 'dry', 'spray', 'primer', 'sealer', 'treat', 'wash', 'dip', 'bake')) return base('enclosure', f('duct', 'lamp', 'window', 'controlPanel'), { body: 'bone', frame: 'steel', accent: 'blue' }, big);
+        if (has('assembl', 'trim', 'install', 'fit', 'marriage', 'chassis', 'wheel', 'interior', 'door', 'glass', 'seat', 'fluid')) return base('enclosure', f('lamp', 'workTable', 'controlPanel'), { body: 'steel', frame: 'ink', accent: 'orange' }, big);
+        if (has('inspect', 'test', 'quality', 'align', 'dyno', 'calibrat', 'leak', 'sign', 'audit')) return base('enclosure', f('lamp', 'window', 'controlPanel', 'curtain'), { body: 'bone', frame: 'ink', accent: 'red' }, big);
+        const accent = has('weld', 'robot', 'framing', 'respot', 'hang', 'handling') ? 'orange' : has('press', 'stamp', 'blank', 'draw', 'trim', 'flang', 'pierc', 'uncoil') ? 'green' : 'blue';
+        return base('machine', f('controlPanel', 'stackLight', 'window', 'doors', 'duct'), { body: accent === 'green' ? 'green' : 'bone', accent, surface: 'steel' }, big);
+      }
       if (shape === 'rack' || has('storage', 'rack', 'warehouse', 'buffer', 'inventory')) return base('rack', f('boxes'), { frame: 'blue', accent: 'orange' }, tall(2.4));
       if (has('conveyor', 'transfer', 'line feed')) return base('conveyor', f('rollers', 'sideGuards'), { body: 'steel', accent: 'blue' });
       if (has('weld', 'robot', 'framing', 'respot', 'handling', 'palletis', 'pick')) return base('robot', f('gripper', 'guard', 'controlPanel'), { body: 'orange', accent: 'ink' }, tall(2));

@@ -27,6 +27,11 @@ export interface StepBrief {
   itemName: string;
   cycleTimeSec: number;
   operators: number;
+  /** planned footprint in metres, used when there is no listing to take a size from */
+  w?: number;
+  d?: number;
+  /** what the plant makes, so a concept model suits it */
+  context?: string;
 }
 
 const triple = { type: 'array', items: { type: 'number' }, description: 'exactly three numbers' };
@@ -210,11 +215,18 @@ async function designLoop(steps: Step[], fallback: { w: number; d: number; h: nu
   return { model: errs.length ? null : fitModel(model!), errors: errs, raw, attempts: Math.min(attempts, MAX_ATTEMPTS) };
 }
 
+/** A listing with no photo and a concept id: equipment nobody sells on Shop, designed from what the step does. */
+const isConcept = (l: ShopListing) => l.variantId.startsWith('concept-');
+
 export async function design(listing: ShopListing, step: StepBrief, emit?: Emit) {
-  running(emit, 'convert', 'shop', 'Fetching the listing photo');
-  const photo = await photoOf(listing.image);
-  const content: Block[] = [...(photo ? [photo] : []), { type: 'text', text: `${listingText(listing)}\n\nThis will stand at the "${step.label}" step of a workshop. Build the detailed 3D model of this product.` }];
-  const out = await designLoop([{ type: 'user_input', content }], { w: listing.dims?.w ?? 1.5, d: listing.dims?.d ?? 0.8, h: 1.2 }, emit, photo ? 'Modelling the product from its photo' : 'Modelling the product from the listing text');
+  const concept = isConcept(listing);
+  if (!concept) running(emit, 'convert', 'shop', 'Fetching the listing photo');
+  const photo = concept ? null : await photoOf(listing.image);
+  const ask = concept
+    ? `There is no product listing for this. Build a detailed 3D model of a typical modern industrial ${step.itemName}, the equipment used for the "${step.label}" step${step.context ? ` in this plant: ${step.context}` : ''}. Model it as it really looks on a factory floor: its frame or housing, the working parts that do the step, guarding, the operator panel, cable trays, extraction, access platforms and steps where a machine this size has them. Its footprint is about ${step.w ?? 3} m wide by ${step.d ?? 2} m deep; choose a realistic height. Use 40 to 80 parts.`
+    : `${listingText(listing)}\n\nThis will stand at the "${step.label}" step of a workshop. Build the detailed 3D model of this product.`;
+  const content: Block[] = [...(photo ? [photo] : []), { type: 'text', text: ask }];
+  const out = await designLoop([{ type: 'user_input', content }], { w: step.w ?? listing.dims?.w ?? 1.5, d: step.d ?? listing.dims?.d ?? 0.8, h: 1.2 }, emit, concept ? `Designing a ${step.itemName} from the process` : photo ? 'Modelling the product from its photo' : 'Modelling the product from the listing text');
   return {
     model: out.model,
     errors: out.errors,
@@ -269,7 +281,7 @@ export async function inspect(listing: ShopListing, model: MachineModel, render:
   const coherent = a.coherent?.type === 'noul' ? a.coherent.noul : 0;
   const proportions = a.proportions?.type === 'noul' ? a.proportions.noul : 0;
   // "recognisably this product" is 0.75; asking for a little more sends borderline models round again
-  const accepted = likeness >= 0.8 && coherent >= 0.5 && proportions >= 0.4;
+  const accepted = likeness >= (photo ? 0.8 : 0.74) && coherent >= 0.5 && proportions >= 0.4;
   ev(emit, {
     stage: 'check',
     actor: 'decisions',
