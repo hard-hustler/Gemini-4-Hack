@@ -117,6 +117,8 @@ export interface Requirements {
   waterWall: Wall;
   /** conveyors on lines and plants, forklifts in workshops */
   transport?: 'forklift' | 'conveyor';
+  /** how big the harness judged the brief to be; a plant's equipment is designed, anything smaller is sourced from Shop first */
+  scale?: 'workshop' | 'line' | 'plant';
   /** what the research phase found, when one ran */
   research?: { summary: string; sources: { url: string; title: string }[]; queries: string[] };
   /** only when the brief includes a drawing: where each drawn station sits, as fractions of the floor */

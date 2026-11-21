@@ -255,6 +255,7 @@ Take every number you can from the search results, and say "estimate" where you 
     const candidate = clean(res.json);
     if (large) candidate.transport = 'conveyor';
     candidate.research = research;
+    candidate.scale = scale;
     errs = checkRequirements(candidate);
     log({
       stage: attempt === 1 ? 'read' : 'plan',
@@ -339,6 +340,7 @@ Take every number you can from the search results, and say "estimate" where you 
       const revised = clean(res.json);
       if (large) revised.transport = 'conveyor';
       revised.research = research;
+      revised.scale = scale;
       const bad = checkRequirements(revised);
       log({ stage: 'plan', actor: 'hydrogen', title: 'Revised the plan after the check', detail: bad.length ? `revision rejected, keeping the first plan: ${bad.join('; ')}` : revised.steps.map((s) => `${s.count} x ${s.label}`).join(', '), ms: res.ms, status: bad.length ? 'fail' : 'ok' });
       if (bad.length) break;

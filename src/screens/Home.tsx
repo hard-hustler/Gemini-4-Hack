@@ -18,6 +18,7 @@ interface EvalResults {
 
 const EXAMPLES = [
   'Plan a car assembly plant that builds 30 compact electric cars an hour, from steel coils to cars driving off the line.',
+  'A machine shop that makes 60 aluminium bike-light housings an hour on CNC lathes and mills, on a 30 by 20 metre floor.',
   'A workshop that assembles 40 espresso grinders an hour on a 16 by 12 metre floor.',
   'A cold brew bottling line for 2,000 bottles an hour, with a cold room and two docks.',
 ];
@@ -441,7 +442,7 @@ export function Home({
           </button>
         </div>
         <div className="demo-grid">
-          {DEMOS.map((d, k) => (
+          {DEMOS.slice(0, 3).map((d, k) => (
             <button key={d.id} className="demo-card reveal" style={{ transitionDelay: `${k * 0.08}s` }} onClick={() => onOpenDemo(d)}>
               <span className="demo-img">
                 <img src={d.image} alt="" loading="lazy" />

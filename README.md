@@ -22,9 +22,11 @@ Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
 
 1. **Landing**: start a project, or open the built-in demo floor (no key needed).
 2. **Brief**: a prompt, a sketch photo, a PDF, or a voice note, in any mix.
-3. **Equipment**: the harness shows the plan it read and the machine it will use
-   for each step. Edit quantities, the floor and demand, or swap any machine for
-   a real Shop listing.
+3. **Equipment**: a window over the brief (or the simulation) showing the plan
+   the harness read and the machine it will use for each step. Edit quantities,
+   the floor and demand, swap any machine for a real Shop listing, or send one
+   agent per step to source and model real equipment. A workshop or a line is
+   sourced from Shop first; a whole plant is designed from the process.
 4. **Simulation**: a valid layout in 3D, simulated over 30 shifts. Drag, type or
    speak edits, ask for improvements, save and compare versions.
 
@@ -85,8 +87,20 @@ each), simulated at 27.9 cars an hour against 30.
 
 Projects the harness generated are saved in `public/demos/` and listed in
 `src/demos.ts`; the Demos screen opens any of them as a copy, with no key
-needed: the electric car plant, an espresso grinder workshop equipped from
-real Shop listings, and the built-in light assembly floor. To add one, open a
+needed: the electric car plant, a CNC machine shop, an espresso grinder
+workshop equipped from real Shop listings, and the built-in light assembly
+floor.
+
+The machine shop is the mid-size story. One paragraph asking for 60 aluminium
+bike-light housings an hour was sized as a line, researched and planned at 30
+stations; the checker flagged three steps the brief never asked for and they
+were removed. Eleven agents then went to Shop: nine came back with a real
+listing (a Hitachi Seiki CNC lathe, a Langmuir MR-1 gantry mill, a KAKA
+bandsaw, an OMTech fibre laser marker and others) and modelled it from the
+listing photo; the parts washer and the CMM had no listing that fit, so those
+two were designed from the process. Every listing is linked from the sourcing
+view and the equipment list. Laid out on 30 x 20 m with conveyors it simulates
+at 59.4 parts an hour against 60. To add one, open a
 project with `?capture` in the URL and post it to `/api/dev/save` (a dev-only
 endpoint that writes under `public/demos` and `public/img`). The images on the
 landing page were captured the same way; all are renders of the harness's own

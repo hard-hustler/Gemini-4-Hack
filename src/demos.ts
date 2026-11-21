@@ -14,7 +14,7 @@ export interface Demo {
   /** JSON under /public, or absent for the demo built in code */
   file?: string;
   stats: string[];
-  scale: 'Workshop' | 'Plant';
+  scale: 'Workshop' | 'Line' | 'Plant';
 }
 
 export const DEMOS: Demo[] = [
@@ -26,6 +26,15 @@ export const DEMOS: Demo[] = [
     file: '/demos/car-plant.json',
     stats: ['60 stations', '180 × 120 m', '20 machines designed', '26.6 cars an hour'],
     scale: 'Plant',
+  },
+  {
+    id: 'machine-shop',
+    name: 'CNC machine shop',
+    blurb: 'A mid-size line equipped from Shop: agents found a real CNC lathe, gantry mill, bandsaw and laser marker, and modelled each from its listing photo.',
+    image: '/img/machine-shop.jpg',
+    file: '/demos/machine-shop.json',
+    stats: ['27 stations', '30 × 20 m', '9 real listings', '59.4 parts an hour'],
+    scale: 'Line',
   },
   {
     id: 'espresso-workshop',

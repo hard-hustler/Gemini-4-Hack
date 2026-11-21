@@ -262,7 +262,13 @@ export function Swarm({
                   </div>
                 )}
               </div>
-              <div className="agent-photo">{a.listing?.image ? <img src={a.listing.image} alt="Listing photo" /> : <span className="agent-wait">{a.listing ? 'No listing: designed from the process' : a.stage === 'queued' ? 'Queued' : 'Searching'}</span>}</div>
+              {a.listing?.image && a.listing.url ? (
+                <a className="agent-photo" href={a.listing.url} target="_blank" rel="noreferrer" title="Open the listing">
+                  <img src={a.listing.image} alt="Listing photo" />
+                </a>
+              ) : (
+                <div className="agent-photo">{a.listing?.image ? <img src={a.listing.image} alt="Listing photo" /> : <span className="agent-wait">{a.listing ? 'No listing: designed from the process' : a.stage === 'queued' ? 'Queued' : 'Searching'}</span>}</div>
+              )}
             </div>
 
             <ol className="rail">
@@ -273,7 +279,17 @@ export function Swarm({
               ))}
             </ol>
 
-            <p className="agent-title">{a.listing ? `${a.listing.title.slice(0, 64)}${a.listing.image ? ` · ${money(a.listing.price)}` : ''}` : ' '}</p>
+            <p className="agent-title">
+              {!a.listing ? (
+                '\u00a0'
+              ) : a.listing.url ? (
+                <a href={a.listing.url} target="_blank" rel="noreferrer" title={`Open the listing at ${a.listing.seller}`}>
+                  {a.listing.title.slice(0, 60)} · {money(a.listing.price)} <Icon name="external" size={12} />
+                </a>
+              ) : (
+                a.listing.title.slice(0, 64)
+              )}
+            </p>
 
             <div className="agent-log">
               {a.log.slice(-3).map((l, k) => (

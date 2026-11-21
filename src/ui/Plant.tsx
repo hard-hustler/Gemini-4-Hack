@@ -133,7 +133,9 @@ export function Zones({ spec, labels }: { spec: FactorySpec; labels: boolean }) 
         const d = z.maxY - z.minY + pad * 2;
         const cx = (z.minX + z.maxX) / 2 - width / 2;
         const cz = (z.minY + z.maxY) / 2 - depth / 2;
-        const size = Math.max(1.6, Math.min(4, Math.max(width, depth) / 40));
+        // sized to the floor, then shrunk so the name fits along its own department
+        const base = Math.max(0.6, Math.min(4, Math.max(width, depth) / 40));
+        const size = Math.max(0.4, Math.min(base, w / (z.name.length * 0.72)));
         return (
           <group key={z.name}>
             <mesh position={[cx, 0.008 + i * 0.001, cz]} rotation={[-Math.PI / 2, 0, 0]}>

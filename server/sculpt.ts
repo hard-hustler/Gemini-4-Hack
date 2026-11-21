@@ -143,7 +143,7 @@ const GOOD_FIT = 0.75;
 
 export async function scout(step: StepBrief, emit?: Emit) {
   const queries = [...new Set([step.itemName, `${step.label} ${step.type}`, `industrial ${step.type} workstation`, `${step.type} table`].map((q) => q.trim().toLowerCase()).filter(Boolean))];
-  const context = `A small light-manufacturing workshop is being equipped. The process step is "${step.label}" (${step.type}); the plan calls for: ${step.itemName}. Complete units of industrial or workshop equipment are wanted, not spare parts, accessories, toys, camping or household furniture.`;
+  const context = `${step.context ? `${step.context} ` : ''}A workshop or small factory is being equipped. The process step is "${step.label}" (${step.type}); the plan calls for: ${step.itemName}. Complete units of industrial or workshop equipment are wanted, not spare parts, accessories, toys, camping or household furniture.`;
   const seen = new Set<string>();
   let ranked: { l: ShopListing; s: number }[] = [];
 

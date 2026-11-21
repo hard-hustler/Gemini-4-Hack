@@ -164,12 +164,14 @@ export function PlanReview({
   };
 
   const sourcing = swarm === 'open';
+  // a plant's machines are not sold on Shop, so they are designed from the process; anything smaller is sourced first
+  const concept = req.scale ? req.scale === 'plant' : !!req.research;
   return (
     <div className="scrim center plan-scrim">
       <section className="plan-dialog" role="dialog" aria-modal="true" aria-label={`Equipment for ${project.name}`}>
         <header className="pd-head">
           <div>
-            <span className="muted small">{sourcing ? (req.research ? 'Designing the equipment' : 'Sourcing real equipment') : 'Equipment'}</span>
+            <span className="muted small">{sourcing ? (concept ? 'Designing the equipment' : 'Sourcing real equipment') : 'Equipment'}</span>
             <h1>{project.name}</h1>
           </div>
           <button className="icon-btn" onClick={onClose} aria-label="Close" title={project.versions.length ? 'Back to the simulation' : 'Close'}>
@@ -215,7 +217,7 @@ export function PlanReview({
             <div style={sourcing ? undefined : { display: 'none' }}>
               <Swarm
                 lines={lines}
-                concept={!!req.research}
+                concept={concept}
                 context={req.summary}
                 actionsHost={actionsHost}
                 visible={sourcing}
@@ -261,7 +263,18 @@ export function PlanReview({
                             <span className="muted small">
                               {l.item.footprint.w} × {l.item.footprint.d} m · {l.item.cycleTimeSec} s a unit{l.item.powerKw ? ` · ${l.item.powerKw} kW` : ''}
                               {l.item.needsWater ? ' · needs water' : ''}
-                              {l.item.source === 'shopify' ? ` · from ${l.item.listing?.seller ?? 'Shop'}` : ''}
+                              {l.item.source === 'shopify' && (
+                                <>
+                                  {' · from '}
+                                  {l.item.listing?.url ? (
+                                    <a href={l.item.listing.url} target="_blank" rel="noreferrer" title="Open the listing">
+                                      {l.item.listing.seller || 'Shop'}
+                                    </a>
+                                  ) : (
+                                    (l.item.listing?.seller ?? 'Shop')
+                                  )}
+                                </>
+                              )}
                             </span>
                             {l.item.model && l.item.modelChecks && (
                               <span className="muted small">
@@ -358,7 +371,7 @@ export function PlanReview({
             {!sourcing && (
               <>
                 <button className="ghost lg" onClick={() => setSwarm('open')} disabled={run.busy || stations === 0}>
-                  {swarm === 'hidden' ? 'Show the agents' : req.research ? 'Design the equipment' : 'Source real equipment'}
+                  {swarm === 'hidden' ? 'Show the agents' : concept ? 'Design the equipment' : 'Source real equipment'}
                 </button>
                 <button className="primary lg" disabled={run.busy || stations === 0} onClick={() => void generate()}>
                   {project.versions.length ? 'Lay it out again' : 'Lay it out and simulate'} <Icon name="arrowRight" />
