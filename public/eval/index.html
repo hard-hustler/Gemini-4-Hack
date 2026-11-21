@@ -4,29 +4,33 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Dry Run eval</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Saira:wght@500;600&display=swap" rel="stylesheet" />
 <style>
-  :root { --bg:#14171c; --panel:#1b2027; --line:#323a45; --text:#e9e6dd; --muted:#98a1ad; --accent:#f2c230; --good:#6fcf7f; --warn:#ff7a5c; }
-  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 'IBM Plex Sans','Helvetica Neue',Arial,sans-serif; }
-  main { max-width:980px; margin:0 auto; padding:28px 16px 60px; }
-  h1 { color:var(--accent); text-transform:uppercase; letter-spacing:.04em; font-size:22px; margin:0; }
-  h2 { font-size:16px; margin:32px 0 4px; }
-  p { color:var(--muted); margin:4px 0 12px; max-width:70ch; }
+  :root { --bg:#f6ecdc; --panel:#fffdf8; --line:#eadfcb; --text:#2b2d2e; --muted:#7d7566; --accent:#b9631c; --good:#3f8f63; --warn:#c94f3a; }
+  body { margin:0; background:radial-gradient(1200px 700px at 12% 0%, #fff6e6 0%, transparent 60%), var(--bg); background-attachment:fixed; color:var(--text); font:14px/1.5 'Instrument Sans','Avenir Next','Segoe UI',sans-serif; }
+  main { max-width:1040px; margin:0 auto; padding:28px 16px 60px; }
+  h1 { font-family:'Saira','Avenir Next',sans-serif; font-weight:600; font-size:34px; letter-spacing:-0.02em; margin:0; }
+  h1 i { color:#e2873a; font-style:normal; }
+  h2 { font-family:'Saira','Avenir Next',sans-serif; font-weight:600; font-size:20px; margin:36px 0 4px; }
+  p { color:#5c574d; margin:4px 0 12px; max-width:72ch; }
   a { color:var(--accent); }
-  .wrap { overflow-x:auto; }
+  .wrap { overflow-x:auto; border-radius:14px; box-shadow:0 1px 2px rgba(74,52,20,.06), 0 12px 32px -12px rgba(74,52,20,.22); }
   table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; background:var(--panel); }
-  th,td { padding:6px 10px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+  th,td { padding:8px 12px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
   th:first-child,td:first-child { text-align:left; }
-  th { color:var(--muted); font-weight:500; }
+  th { color:var(--muted); font-weight:500; font-size:12px; }
   td.note { text-align:left; white-space:normal; color:var(--muted); min-width:220px; }
   .good { color:var(--good); } .warn { color:var(--warn); }
-  .big { display:flex; gap:28px; flex-wrap:wrap; margin:8px 0 12px; }
+  .big { display:flex; gap:28px; flex-wrap:wrap; margin:10px 0 12px; }
   .big div { display:flex; flex-direction:column; }
-  .big b { font-size:26px; } .big span { color:var(--muted); font-size:12px; }
+  .big b { font-family:'Saira','Avenir Next',sans-serif; font-size:30px; line-height:1.1; } .big span { color:var(--muted); font-size:12px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Dry Run eval</h1>
+  <h1>dry run<i>.</i> eval</h1>
   <p id="when"></p>
   <p>One model call compared with the harness. Raw data: <a href="results.json">results.json</a>. Re-run with <code>npm run eval</code>.</p>
 
