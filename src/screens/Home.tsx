@@ -310,7 +310,7 @@ export function Home({
             <span>departments, from research</span>
           </div>
           <div>
-            <Count to={27.9} digits={1} />
+            <Count to={26.6} digits={1} />
             <span>cars an hour, against 30 asked</span>
           </div>
         </div>

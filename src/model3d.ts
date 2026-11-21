@@ -222,3 +222,21 @@ export function fitModel(m: MachineModel): MachineModel {
 export function describeModel(m: MachineModel): string {
   return m.parts.map((p, i) => `${i + 1}. ${p.label}: ${p.shape} ${p.size.map((v) => v.toFixed(2)).join(' x ')} at ${p.at.map((v) => v.toFixed(2)).join(', ')}${p.rot.some(Boolean) ? ` rot ${p.rot.join(',')}` : ''} ${p.material}${p.motion !== 'none' ? ` ${p.motion}` : ''}`).join('\n');
 }
+
+/**
+ * Parts that act as a roof: big, flat, near the top of something tall enough to walk into.
+ * Seen from above they hide everything that makes the machine worth looking at, so the scene
+ * draws them see-through.
+ */
+export function roofParts(m: MachineModel): Set<number> {
+  const out = new Set<number>();
+  const { w, d, h } = m.size;
+  if (h < 1.9) return out;
+  m.parts.forEach((p, i) => {
+    const b = partBox(p);
+    const area = (b.max[0] - b.min[0]) * (b.max[2] - b.min[2]);
+    const thick = b.max[1] - b.min[1];
+    if (b.max[1] >= h * 0.8 && b.min[1] >= h * 0.45 && thick <= h * 0.3 && area >= w * d * 0.35) out.add(i);
+  });
+  return out;
+}

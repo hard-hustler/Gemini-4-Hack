@@ -3,7 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { MATERIALS, type MachineModel, type MaterialName, type ModelPart } from '../model3d';
+import { MATERIALS, roofParts, type MachineModel, type MaterialName, type ModelPart } from '../model3d';
 
 let hazardTexture: THREE.CanvasTexture | null = null;
 function hazard(): THREE.CanvasTexture {
@@ -54,9 +54,23 @@ const unit = {
 };
 const rad = (d: number) => (d * Math.PI) / 180;
 
-function PartMesh({ part, animate, index }: { part: ModelPart; animate: boolean; index: number }) {
+/** A roof drawn as a ghost: enough to show it is there, not enough to hide what is under it. */
+const ghosts = new Map<MaterialName, THREE.MeshStandardMaterial>();
+function ghostOf(name: MaterialName): THREE.MeshStandardMaterial {
+  let m = ghosts.get(name);
+  if (!m) {
+    m = materialFor(name).clone();
+    m.transparent = true;
+    m.opacity = 0.14;
+    m.depthWrite = false;
+    ghosts.set(name, m);
+  }
+  return m;
+}
+
+function PartMesh({ part, animate, index, roof }: { part: ModelPart; animate: boolean; index: number; roof: boolean }) {
   const outer = useRef<THREE.Group>(null);
-  const base = materialFor(part.material);
+  const base = roof ? ghostOf(part.material) : materialFor(part.material);
   // a pulsing light gets its own material so it does not drag every other light with it
   const material = useMemo(() => (part.motion === 'pulse' ? base.clone() : base), [base, part.motion]);
   const see = base.transparent;
@@ -98,10 +112,11 @@ function PartMesh({ part, animate, index }: { part: ModelPart; animate: boolean;
 }
 
 export function ModelMesh({ model, animate = true }: { model: MachineModel; animate?: boolean }) {
+  const roofs = useMemo(() => roofParts(model), [model]);
   return (
     <>
       {model.parts.map((p, i) => (
-        <PartMesh key={i} part={p} animate={animate} index={i} />
+        <PartMesh key={i} part={p} animate={animate} index={i} roof={roofs.has(i)} />
       ))}
     </>
   );

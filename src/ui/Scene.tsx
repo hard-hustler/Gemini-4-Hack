@@ -320,11 +320,26 @@ function Movers({ tour, carriers, hot }: { tour: Tour; carriers: number; hot: bo
 function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number }) {
   const { camera, size, controls } = useThree();
   const { width, depth } = spec.floor;
+  // A workshop is framed by its room. A plant is framed by its equipment: the floor can be far
+  // larger than what stands on it, and framing the floor makes every machine a speck.
+  const frame = useMemo(() => {
+    if (spec.stations.length <= 30) return { w: width, d: depth, cx: 0, cz: 0 };
+    let [minX, maxX, minY, maxY] = [Infinity, -Infinity, Infinity, -Infinity];
+    for (const s of spec.stations) {
+      const f = footprint(s);
+      minX = Math.min(minX, f.x);
+      maxX = Math.max(maxX, f.x + f.w);
+      minY = Math.min(minY, f.y);
+      maxY = Math.max(maxY, f.y + f.d);
+    }
+    const pad = 6;
+    return { w: Math.min(width, maxX - minX + pad * 2), d: Math.min(depth, maxY - minY + pad * 2), cx: (minX + maxX) / 2 - width / 2, cz: (minY + maxY) / 2 - depth / 2 };
+  }, [spec.stations, width, depth]);
   useEffect(() => {
     const free = Math.max(320, size.width - insetRight);
-    const zoom = Math.min(free / ((width + depth) * 0.86), size.height / ((width + depth) * 0.7));
+    const zoom = Math.min(free / ((frame.w + frame.d) * 0.86), size.height / ((frame.w + frame.d) * 0.7));
     const shift = insetRight / 2 / zoom / Math.SQRT2;
-    const target = new THREE.Vector3(shift, 0, -shift);
+    const target = new THREE.Vector3(frame.cx + shift, 0, frame.cz - shift);
     camera.position.set(target.x + 40, 50, target.z + 40);
     (camera as THREE.OrthographicCamera).zoom = zoom;
     camera.lookAt(target);
@@ -334,7 +349,7 @@ function FitCamera({ spec, insetRight }: { spec: FactorySpec; insetRight: number
       c.target.copy(target);
       c.update();
     }
-  }, [camera, controls, size.width, size.height, width, depth, insetRight]);
+  }, [camera, controls, size.width, size.height, frame, insetRight]);
   return null;
 }
 

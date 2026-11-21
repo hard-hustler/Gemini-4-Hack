@@ -90,7 +90,7 @@ This brief is for a large operation, not a workshop. Plan it as a plant:
 - Size each step by takt: count = ceil(demandPerHour * cycleTimeSec / 3600 / 0.85), between 1 and 40. Slow processes (ovens, curing, framing) need many stations in parallel; fast ones need one or two.
 - Give each step a realistic single-station footprint (w, d up to 12 m) and power draw from the research.
 - transport is "conveyor".
-- Choose a floor that holds everything with aisles: about six times the total equipment footprint, wider than deep (for example 180 by 100 m), and say so in assumptions.
+- Choose a floor that holds everything with aisles: about four times the total equipment footprint, wider than deep (for example 150 by 90 m), and say so in assumptions.
 - sketch is empty.`;
 
 function clean(raw: any): Requirements {

@@ -134,6 +134,8 @@ interface RowStyle {
   paired: boolean;
   /** fill each row before starting the next, instead of splitting evenly */
   greedy: boolean;
+  /** widen gaps and aisles to use the floor, up to these limits (plants) */
+  spread?: { gap: number; aisle: number };
 }
 
 /** Stations in process order along a serpentine: row one runs one way, row two comes back (a U for two rows). */
@@ -164,21 +166,28 @@ function serpentine(stations: Station[], width: number, depth: number, st: RowSt
   const rowD = (row: Station[]) => Math.max(...row.map((s) => s.d));
   // paired: wall row, aisle, then rows back to back in twos
   const aisleAfter = (r: number) => (r === groups.length - 1 ? 0 : st.paired && r % 2 === 1 ? 0 : st.aisle);
-  const blockD = groups.reduce((t, g, r) => t + rowD(g) + aisleAfter(r), 0);
+  let blockD = groups.reduce((t, g, r) => t + rowD(g) + aisleAfter(r), 0);
   if (blockD > depth - 2 * st.margin + EPS) return null;
   // centre the block on the floor so the rows read as one line with clear aisles all round
+  // spreading: share spare floor between the aisles and between the stations of each row
+  const down = (v: number) => Math.max(0, Math.floor(v / CELL + EPS) * CELL);
+  const aisles = groups.filter((_, r) => aisleAfter(r) > 0).length;
+  const moreAisle = st.spread && aisles ? down(Math.min(st.spread.aisle - st.aisle, (depth - 2 * st.margin - blockD) / aisles)) : 0;
+  blockD += moreAisle * aisles;
   let y = st.margin + Math.floor((depth - 2 * st.margin - blockD) / 2 / CELL) * CELL;
   const out: Point[] = [];
   groups.forEach((row, r) => {
-    let cx = st.margin + Math.floor((usable - rowW(row)) / 2 / CELL) * CELL;
+    const joins = row.filter((_, i) => gapAfter(row, i) > 0).length;
+    const moreGap = st.spread && joins ? down(Math.min(st.spread.gap - st.gap, (usable - rowW(row)) / joins)) : 0;
+    const wide = rowW(row) + moreGap * joins;
+    let cx = st.margin + Math.floor((usable - wide) / 2 / CELL) * CELL;
     const xs = row.map((s, i) => {
       const at = cx;
-      cx += s.w + gapAfter(row, i);
+      cx += s.w + gapAfter(row, i) + (gapAfter(row, i) > 0 ? moreGap : 0);
       return at;
     });
-    // in a pair, the second row sits against the back of the first
     row.forEach((s, i) => out.push({ x: r % 2 === 0 ? xs[i] : width - xs[i] - s.w, y }));
-    y += rowD(row) + aisleAfter(r);
+    y += rowD(row) + aisleAfter(r) + (aisleAfter(r) > 0 ? moreAisle : 0);
   });
   return out;
 }
@@ -327,8 +336,8 @@ export function buildLayout(req: Requirements, equipment: EquipmentLine[], opts:
     // a plant gets wide conveyor aisles before anything tighter is tried
     ...(large
       ? [
-          { margin: 8, gap: 5, aisle: 12, bank: false, paired: false, greedy: false },
-          { margin: 6, gap: 4, aisle: 9, bank: false, paired: false, greedy: false },
+          { margin: 8, gap: 5, aisle: 12, bank: false, paired: false, greedy: false, spread: { gap: 10, aisle: 18 } },
+          { margin: 6, gap: 4, aisle: 9, bank: false, paired: false, greedy: false, spread: { gap: 8, aisle: 14 } },
           { margin: 4, gap: 3, aisle: 6, bank: false, paired: false, greedy: false },
           { margin: 3, gap: 2, aisle: 4, bank: true, paired: false, greedy: false },
         ]

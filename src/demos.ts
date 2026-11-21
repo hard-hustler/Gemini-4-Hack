@@ -24,7 +24,7 @@ export const DEMOS: Demo[] = [
     blurb: 'One sentence asking for 30 cars an hour became a researched, five-department plant with every machine designed by an agent.',
     image: '/img/car-plant.jpg',
     file: '/demos/car-plant.json',
-    stats: ['60 stations', '180 × 120 m', '20 machines designed', '27.9 cars an hour'],
+    stats: ['60 stations', '180 × 120 m', '20 machines designed', '26.6 cars an hour'],
     scale: 'Plant',
   },
   {

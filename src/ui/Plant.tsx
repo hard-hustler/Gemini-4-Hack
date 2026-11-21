@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Routes } from '../engines/route';
 import { buildParts, TONE_HEX, type MachineRecipe } from '../machines';
-import { MATERIALS, type MachineModel } from '../model3d';
+import { MATERIALS, roofParts, type MachineModel } from '../model3d';
 import { footprint, type FactorySpec } from '../spec';
 
 // ---------- merged machines ----------
@@ -62,7 +62,7 @@ const liteMaterials = new Map<string, THREE.MeshStandardMaterial>();
 function liteMaterial(key: string): THREE.MeshStandardMaterial {
   let m = liteMaterials.get(key);
   if (!m) {
-    const [kind, name] = key.split(':');
+    const [kind, name, roof] = key.split(':');
     if (kind === 'tone') {
       const [tone, opacity, glow] = name.split('|');
       const color = TONE_HEX[tone as keyof typeof TONE_HEX] ?? '#888';
@@ -70,7 +70,8 @@ function liteMaterial(key: string): THREE.MeshStandardMaterial {
       m = new THREE.MeshStandardMaterial({ color, roughness: tone === 'glass' ? 0.25 : 0.85, transparent: see, opacity: opacity !== '' ? Number(opacity) : tone === 'glass' ? 0.7 : 1, emissive: glow ? color : '#000', emissiveIntensity: glow ? 0.5 : 0 });
     } else {
       const def = MATERIALS[name as keyof typeof MATERIALS] as { color: string; metalness: number; roughness: number; opacity?: number; emissive?: string; glow?: number };
-      m = new THREE.MeshStandardMaterial({ color: def.color, metalness: def.metalness, roughness: def.roughness, transparent: def.opacity !== undefined, opacity: def.opacity ?? 1, emissive: def.emissive ?? '#000', emissiveIntensity: def.glow ?? 0 });
+      // a roof is drawn as a ghost so the machine under it shows
+      m = new THREE.MeshStandardMaterial({ color: def.color, metalness: def.metalness, roughness: def.roughness, transparent: !!roof || def.opacity !== undefined, opacity: roof ? 0.14 : (def.opacity ?? 1), depthWrite: !roof, emissive: def.emissive ?? '#000', emissiveIntensity: def.glow ?? 0 });
     }
     liteMaterials.set(key, m);
   }
@@ -83,8 +84,9 @@ const rad = (d: number) => (d * Math.PI) / 180;
 export function LiteMachine({ recipe, model }: { recipe?: MachineRecipe; model?: MachineModel }) {
   const groups = useMemo(() => {
     if (model) {
+      const roofs = roofParts(model);
       return merged(`model|${model.name}|${model.parts.length}|${JSON.stringify(model.size)}`, () =>
-        model.parts.map((p) => ({ shape: p.shape === 'cylinder' ? 'cyl' : p.shape, size: p.size, at: p.at, rot: [rad(p.rot[0]), rad(p.rot[1]), rad(p.rot[2])] as [number, number, number], key: `mat:${p.material}` })),
+        model.parts.map((p, i) => ({ shape: p.shape === 'cylinder' ? 'cyl' : p.shape, size: p.size, at: p.at, rot: [rad(p.rot[0]), rad(p.rot[1]), rad(p.rot[2])] as [number, number, number], key: `mat:${p.material}${roofs.has(i) ? ':roof' : ''}` })),
       );
     }
     if (!recipe) return [];
