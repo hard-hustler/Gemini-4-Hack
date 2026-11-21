@@ -18,6 +18,10 @@ npm test        # engine unit tests
 Put `GEMINI_API_KEY=...` in `.env` (see `.env.example`). Without a key the
 3D view, drag edits and engines still work; only the model buttons fail.
 
+Use Node 24 (`.nvmrc`). Live Shopify search, cart and approved single-merchant
+checkout are integrated into the existing Catalog, equipment drawer and bill.
+See [Shopify commerce setup and safe demo](docs/shopify-commerce.md).
+
 ## The flow
 
 1. **Landing**: start a project, or open the built-in demo floor (no key needed).

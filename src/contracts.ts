@@ -82,6 +82,17 @@ export interface ShopListing {
   checkoutUrl?: string;
   image?: string;
   variantId: string;
+  /** Commerce fields are optional so saved projects from before commerce still open. */
+  productId?: string;
+  sellerDomain?: string;
+  variantTitle?: string;
+  /** Unknown availability never grants permission to buy. */
+  available?: boolean | null;
+  /** Exact currency minor units from Shop, used for checkout approval. */
+  priceMinor?: number;
+  options?: { name: string; label: string }[];
+  productOptions?: { name: string; values: { label: string }[] }[];
+  messages?: string[];
   rating?: number;
   /** footprint read from the listing text, when it states one */
   dims?: { w: number; d: number; text: string };

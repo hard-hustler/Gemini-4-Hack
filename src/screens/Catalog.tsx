@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { BUILTIN } from '../catalog';
-import type { CatalogItem } from '../contracts';
+import type { CatalogItem, ShopListing } from '../contracts';
 import { ARCHETYPE_NAMES, ARCHETYPES, featureText, repairRecipe, type Archetype, type MachineRecipe } from '../machines';
-import { money } from '../store';
-import { TopBar } from '../ui/common';
+import { api, money } from '../store';
+import { Notice, TopBar } from '../ui/common';
+import { ShopifyAttribution, ShopProductCard } from '../ui/Commerce';
 import { MachineThumb } from '../ui/thumbs';
 
 const SIZES: Record<Archetype, { w: number; d: number; h: number }> = {
@@ -44,6 +46,33 @@ function Card({ item, sub }: { item: CatalogItem; sub: string }) {
   );
 }
 
+function LiveCatalog() {
+  const [query, setQuery] = useState('steel workbench');
+  const [listings, setListings] = useState<ShopListing[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const search = async () => {
+    setBusy(true);
+    setError(null);
+    setListings(null);
+    try { setListings((await api<{ listings: ShopListing[] }>('/api/catalog/search', { query })).listings); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  return <section className="commerce-search" aria-label="Live Shopify equipment catalog">
+    <div className="section-head"><h2>Shop real equipment</h2><ShopifyAttribution /></div>
+    <p className="muted small">Live merchant photos, variants and prices from Shop MCP. Adding products to your cart is separate from placing equipment in a plan. Each merchant has its own approved checkout.</p>
+    <form className="search" onSubmit={(e) => { e.preventDefault(); void search(); }}>
+      <input aria-label="Search Shopify equipment" value={query} onChange={(e) => setQuery(e.target.value)} maxLength={200} placeholder="steel workbench" />
+      <button className="primary" disabled={busy || query.trim().length < 2}>{busy ? 'Searching…' : 'Search Shop'}</button>
+    </form>
+    {error && <Notice tone="error" title={error} />}
+    {busy && <p className="muted small" role="status">Searching the live Shopify catalog…</p>}
+    {listings?.length === 0 && <p className="muted small" role="status">No products found. Try another search.</p>}
+    <div className="commerce-results">{listings?.map((listing) => <ShopProductCard key={listing.variantId} listing={listing} />)}</div>
+  </section>;
+}
+
 export function Catalog({ onHome }: { onHome: () => void }) {
   return (
     <div className="page">
@@ -53,6 +82,8 @@ export function Catalog({ onHome }: { onHome: () => void }) {
         <p className="lede">
           Every machine is a recipe: one of {ARCHETYPE_NAMES.length} archetypes, a size, colours and a list of features. Code builds the 3D from that, so each one is exactly its stated size. Listings from Shop are converted into the same recipes.
         </p>
+
+        <LiveCatalog />
 
         <h2>Built in</h2>
         <div className="cat-grid">

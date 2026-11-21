@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AdvocateFinding, AdvocateReport, AdvocateRole, CharacterRole, FixProposal, TraceEvent } from '../contracts';
+import type { AdvocateFinding, AdvocateReport, AdvocateRole, CharacterRole, FixProposal, ShopListing, TraceEvent } from '../contracts';
 import { ADVOCATE_CHARACTERS, ADVOCATE_ROLES, runDeterministicAdvocateAudit } from '../engines/advocate';
 import { compare, evaluate, makeVersion, type Version } from '../engines/versions';
 import { validate, type ValidationError } from '../engines/validate';
@@ -9,6 +9,8 @@ import { startRecording, type Recorder } from '../ui/audio';
 import { Notice, RunStatus, TopBar, useRun } from '../ui/common';
 import { Icon } from '../ui/icons';
 import { Scene, type Layers } from '../ui/Scene';
+import { AddToCartButton, ShopifyAttribution } from '../ui/Commerce';
+import { formatPrice, priceSubtotals, safeWebUrl } from '../commerce';
 
 type Goal = 'cost' | 'lead' | 'build';
 interface Deltas {
@@ -625,10 +627,10 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
     </b>
   );
   const bill = useMemo(() => {
-    const map = new Map<string, { name: string; qty: number; price: number; checkoutUrl?: string; listingUrl?: string }>();
+    const map = new Map<string, { name: string; qty: number; price: number; listing?: ShopListing; listingUrl?: string }>();
     for (const s of draft.stations) {
       const key = s.catalogId ?? s.type;
-      const row = map.get(key) ?? { name: s.name ?? s.type, qty: 0, price: s.price, checkoutUrl: s.checkoutUrl, listingUrl: s.listingUrl };
+      const row = map.get(key) ?? { name: s.name ?? s.type, qty: 0, price: s.price, listing: s.listing, listingUrl: s.listingUrl };
       row.qty++;
       map.set(key, row);
     }
@@ -1103,21 +1105,19 @@ export function Workspace({ project, onHome, onPlan, onChange }: { project: Proj
                   <span>
                     {r.qty} × {r.name}
                   </span>
-                  <span>{money(r.qty * r.price)}</span>
-                  {r.checkoutUrl || r.listingUrl ? (
-                    <a className="small" href={r.checkoutUrl ? r.checkoutUrl.replace(/:1(?=\?|$)/, `:${r.qty}`) : r.listingUrl} target="_blank" rel="noreferrer">
-                      {r.checkoutUrl ? 'Buy' : 'Listing'}
-                    </a>
-                  ) : (
-                    <span />
-                  )}
+                  <span>{r.listing ? formatPrice(r.listing, r.qty) : money(r.qty * r.price)}</span>
+                  {r.listing ? <AddToCartButton listing={r.listing} quantity={r.qty} /> : safeWebUrl(r.listingUrl) ? (
+                    <a className="small" href={safeWebUrl(r.listingUrl)} target="_blank" rel="noopener noreferrer">Listing</a>
+                  ) : <span />}
                 </div>
               ))}
               <div className="bill-row">
-                <b>Total</b>
-                <b>{money(bill.reduce((t, r) => t + r.qty * r.price, 0))}</b>
+                <b>Item totals</b>
+                <div className="bill-currency-totals">{priceSubtotals(bill.map((row) => ({ listing: row.listing, price: row.price, quantity: row.qty }))).map((subtotal) => <b key={subtotal.currency}>{formatPrice({ price: 0, ...subtotal })}{subtotal.estimated ? ' (includes estimates)' : ''}</b>)}</div>
                 <span />
               </div>
+              <p className="muted small">Simulation costs are planning estimates. Merchant totals stay in their original currencies; no currency conversion is applied. Review each merchant and approve checkout in your cart.</p>
+              <ShopifyAttribution />
               <div className="row">
                 <button className="ghost sm" onClick={onPlan}>
                   Change equipment
